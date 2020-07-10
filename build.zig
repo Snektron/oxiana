@@ -1,20 +1,24 @@
-const Builder = @import("std").build.Builder;
+const std = @import("std");
+const Builder = std.build.Builder;
+const vk_gen = @import("deps/vulkan-zig/generator/index.zig");
 
 pub fn build(b: *Builder) void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-
-    // Standard release options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
 
     const exe = b.addExecutable("oxiana", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.install();
+
+    const vk_sdk_path = std.os.getenv("VULKAN_SDK").?;
+    const vk_xml_path = std.fs.path.join(
+        b.allocator,
+        &[_][]const u8{vk_sdk_path, "share/vulkan/registry/vk.xml"},
+    ) catch unreachable;
+    const vk_gen_step = vk_gen.VkGenerateStep.init(b, vk_xml_path, "vk.zig");
+    exe.step.dependOn(&vk_gen_step.step);
+    exe.addPackagePath("vulkan", vk_gen_step.full_out_path);
 
     const run_cmd = exe.run();
     run_cmd.step.dependOn(b.getInstallStep());
