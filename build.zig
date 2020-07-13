@@ -10,6 +10,8 @@ pub fn build(b: *Builder) void {
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.install();
+    exe.linkSystemLibrary("c");
+    exe.linkSystemLibrary("glfw");
 
     const vk_sdk_path = std.os.getenv("VULKAN_SDK").?;
     const vk_xml_path = std.fs.path.join(
