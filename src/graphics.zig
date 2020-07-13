@@ -29,6 +29,7 @@ const InstanceDispatch = struct {
 
 const DeviceDispatch = struct {
     vkDestroyDevice: vk.PfnDestroyDevice,
+    vkGetDeviceQueue: vk.PfnGetDeviceQueue,
 
     usingnamespace vk.DeviceWrapper(@This());
 };
@@ -54,6 +55,7 @@ pub const Instance = struct {
         }, null);
 
         return Instance{
+            // Instance is leaked if the following fails.
             .vki = try InstanceDispatch.load(handle, loader),
             .handle = handle,
         };
@@ -80,15 +82,15 @@ pub const Instance = struct {
         return pdev_infos;
     }
 
-    pub fn findAndCreateDevice(self: Instance, allocator: *Allocator, surface: vk.SurfaceKHR, extensions: []const []const u8) !Device {
+    pub fn findAndCreateDevice(self: Instance, allocator: *Allocator, surface: vk.SurfaceKHR, extensions: []const [*:0]const u8) !Device {
         const pdev_infos = try self.physicalDeviceInfos(allocator);
         defer allocator.free(pdev_infos);
 
-        var tmp_extensions = try allocator.alloc([]const u8, extensions.len);
+        var tmp_extensions = try allocator.alloc([*:0]const u8, extensions.len);
         defer allocator.free(tmp_extensions);
 
         for (pdev_infos) |pdev| {
-            mem.copy([]const u8, tmp_extensions, extensions);
+            mem.copy([*:0]const u8, tmp_extensions, extensions);
             if (!(try pdev.supportsSurface(self.vki, surface))) {
                 std.log.info(.graphics, "Cannot use device '{}': Surface not supported\n", .{pdev.name()});
                 continue;
@@ -96,9 +98,12 @@ pub const Instance = struct {
 
             var unsupported_extensions = try pdev.filterUnsupportedExtensions(self.vki, allocator, tmp_extensions);
             if (unsupported_extensions.len > 0) {
-                std.log.info(.graphics, "Cannot use device '{}': {} unsupported extension(s)\n", .{pdev.name(), unsupported_extensions.len});
+                std.log.info(.graphics, "Cannot use device '{}': {} required extension(s) not supported\n", .{
+                    pdev.name(),
+                    unsupported_extensions.len,
+                });
                 for (unsupported_extensions) |ext| {
-                    std.log.info(.graphics, "  Extension '{}' not supported\n", .{ext});
+                    std.log.info(.graphics, "- Extension '{}' is not supported\n", .{mem.spanZ(ext)});
                 }
                 continue;
             }
@@ -114,9 +119,10 @@ pub const Instance = struct {
                 std.log.info(.graphics, "Cannot use device '{}': {}\n", .{pdev.name(), message});
                 continue;
             };
+            defer queues.deinit(allocator);
 
             // Just pick the first available suitable device
-            return try Device.init(self, pdev, queues);
+            return try Device.init(self, pdev, extensions, queues);
         }
 
         return error.NoSuitableDevice;
@@ -124,9 +130,14 @@ pub const Instance = struct {
 };
 
 pub const QueueAllocation = struct {
+    family_propsv: []vk.QueueFamilyProperties,
     graphics_family: u32,
-    present_family: u32,
     compute_family: u32,
+    present_family: u32,
+
+    fn deinit(self: QueueAllocation, allocator: *Allocator) void {
+        allocator.free(self.family_propsv);
+    }
 };
 
 pub const PhysicalDeviceInfo = struct {
@@ -162,8 +173,8 @@ pub const PhysicalDeviceInfo = struct {
         self: PhysicalDeviceInfo,
         vki: InstanceDispatch,
         allocator: *Allocator,
-        extensions: [][]const u8,
-    ) ![][]const u8 {
+        extensions: [][*:0]const u8,
+    ) ![][*:0]const u8 {
         var count: u32 = undefined;
         _ = try vki.enumerateDeviceExtensionProperties(self.handle, null, &count, null);
 
@@ -173,7 +184,8 @@ pub const PhysicalDeviceInfo = struct {
         _ = try vki.enumerateDeviceExtensionProperties(self.handle, null, &count, propsv.ptr);
 
         var write_index: usize = 0;
-        for (extensions) |ext| {
+        for (extensions) |ext_z| {
+            const ext = mem.spanZ(ext_z);
             for (propsv) |props| {
                 const len = std.mem.indexOfScalar(u8, &props.extension_name, 0).?;
                 const prop_ext = props.extension_name[0 .. len];
@@ -194,7 +206,7 @@ pub const PhysicalDeviceInfo = struct {
         vki.getPhysicalDeviceQueueFamilyProperties(self.handle, &family_count, null);
 
         var propsv = try allocator.alloc(vk.QueueFamilyProperties, family_count);
-        defer allocator.free(propsv);
+        errdefer allocator.free(propsv);
         vki.getPhysicalDeviceQueueFamilyProperties(self.handle, &family_count, propsv.ptr);
 
         var graphics_family = blk: {
@@ -251,6 +263,7 @@ pub const PhysicalDeviceInfo = struct {
         };
 
         return QueueAllocation{
+            .family_propsv = propsv,
             .graphics_family = graphics_family,
             .present_family = present_family,
             .compute_family = compute_family,
@@ -261,11 +274,13 @@ pub const PhysicalDeviceInfo = struct {
 pub const Queue = struct {
     handle: vk.Queue,
     family: u32,
+    index: u32,
 
-    fn init(vkd: DeviceDispatch, dev: vk.Device, family: u32) Queue {
+    fn init(vkd: DeviceDispatch, dev: vk.Device, family: u32, index: u32) Queue {
         return .{
-            .handle = vkd.getDeviceQueue(dev, family, 0),
+            .handle = vkd.getDeviceQueue(dev, family, index),
             .family = family,
+            .index = index,
         };
     }
 };
@@ -273,15 +288,81 @@ pub const Queue = struct {
 pub const Device = struct {
     vkd: DeviceDispatch,
 
-    pdev_info: PhysicalDeviceInfo,
+    pdev: PhysicalDeviceInfo,
     handle: vk.Device,
 
-    present_queue: Queue,
     graphics_queue: Queue,
     compute_queue: Queue,
+    present_queue: Queue,
 
-    pub fn init(instance: Instance, pdev_info: PhysicalDeviceInfo, queues: QueueAllocation) !Device {
-        return error.Wip;
+    pub fn init(instance: Instance, pdev: PhysicalDeviceInfo, extensions: []const [*:0]const u8, qalloc: QueueAllocation) !Device {
+        const families = [_]u32{qalloc.graphics_family, qalloc.compute_family, qalloc.present_family};
+        const priorities = [_]f32{1} ** families.len;
+
+        var qci_buffer: [3]vk.DeviceQueueCreateInfo = undefined;
+        var n_unique_families: u32 = 0;
+
+        for (families) |family| {
+            for (qci_buffer[0 .. n_unique_families]) |*qci| {
+                if (qci.queue_family_index == family and qci.queue_count < qalloc.family_propsv[family].queue_count) {
+                    qci.queue_count += 1;
+                    break;
+                }
+            } else {
+                qci_buffer[n_unique_families] = .{
+                    .flags = .{},
+                    .queue_family_index = family,
+                    .queue_count = 1,
+                    .p_queue_priorities = &priorities,
+                };
+                n_unique_families += 1;
+            }
+        }
+
+        const handle = try instance.vki.createDevice(pdev.handle, .{
+            .flags = .{},
+            .queue_create_info_count = n_unique_families,
+            .p_queue_create_infos = &qci_buffer,
+            .enabled_layer_count = 0,
+            .pp_enabled_layer_names = undefined,
+            .enabled_extension_count = @intCast(u32, extensions.len),
+            .pp_enabled_extension_names = extensions.ptr,
+            .p_enabled_features = null,
+        }, null);
+
+        // Device is leaked if the following fails.
+        const vkd = try DeviceDispatch.load(handle, instance.vki.vkGetDeviceProcAddr);
+        errdefer vkd.destroyDevice(handle, null);
+
+        var queues: [families.len]Queue = undefined;
+        for (queues) |*queue, i| {
+            const family = families[i];
+
+            const qci = for (qci_buffer[0 .. n_unique_families]) |*qci| {
+                if (qci.queue_family_index == family) {
+                    break qci;
+                }
+            } else unreachable;
+
+            // Use the queue_count field to check how many queues of this family
+            // were already allocated. Some will have to share if there aren't enough...
+            if (qci.queue_count > 0) {
+                qci.queue_count -= 1;
+            }
+
+            queue.* = Queue.init(vkd, handle, family, qci.queue_count);
+        }
+
+        return Device{
+            .vkd = vkd,
+            .pdev = pdev,
+            .handle = handle,
+
+            // Indices according to `families`.
+            .graphics_queue = queues[0],
+            .compute_queue = queues[1],
+            .present_queue = queues[2],
+        };
     }
 
     pub fn deinit(self: Device) void {

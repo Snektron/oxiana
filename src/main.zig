@@ -41,9 +41,14 @@ pub fn main() !void {
     const surface = try createSurface(instance, window);
     defer instance.vki.destroySurfaceKHR(instance.handle, surface, null);
 
-    const device = try instance.findAndCreateDevice(allocator, surface, &[_][]const u8{
-        vk.extension_info.khr_swapchain.name
+    const device = try instance.findAndCreateDevice(allocator, surface, &[_][*:0]const u8{
+        vk.extension_info.khr_swapchain.name,
     });
+
+    std.log.info(.main, "Using device '{}'\n", .{device.pdev.name()});
+    std.log.info(.main, "Graphics queue: {}\n", .{device.graphics_queue});
+    std.log.info(.main, "Compute queue: {}\n", .{device.compute_queue});
+    std.log.info(.main, "Present queue: {}\n", .{device.present_queue});
 
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
         c.glfwSwapBuffers(window);
