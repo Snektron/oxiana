@@ -2,8 +2,12 @@ const std = @import("std");
 const vk = @import("vulkan");
 const c = @import("c.zig");
 const graphics = @import("graphics.zig");
+const Swapchain = @import("swapchain.zig").Swapchain;
 
 const app_name = "Oxiana";
+const required_device_extensions = &[_][*:0]const u8{
+    vk.extension_info.khr_swapchain.name,
+};
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -41,16 +45,16 @@ pub fn main() !void {
     const surface = try createSurface(instance, window);
     defer instance.vki.destroySurfaceKHR(instance.handle, surface, null);
 
-    const device = try instance.findAndCreateDevice(allocator, surface, &[_][*:0]const u8{
-        vk.extension_info.khr_swapchain.name,
-    });
+    const device = try instance.findAndCreateDevice(allocator, surface, required_device_extensions);
+    defer device.deinit();
 
     std.log.info(.main, "Using device '{}'\n", .{device.pdev.name()});
-    std.log.info(.main, "Graphics queue: {}\n", .{device.graphics_queue});
-    std.log.info(.main, "Compute queue: {}\n", .{device.compute_queue});
-    std.log.info(.main, "Present queue: {}\n", .{device.present_queue});
+
+    var swappy = try Swapchain.init(&instance, &device, allocator, extent, surface);
+    defer swappy.deinit();
 
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
+
         c.glfwSwapBuffers(window);
         c.glfwPollEvents();
     }

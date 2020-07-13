@@ -9,7 +9,7 @@ const BaseDispatch = struct {
     usingnamespace vk.BaseWrapper(@This());
 };
 
-const InstanceDispatch = struct {
+pub const InstanceDispatch = struct {
     vkDestroyInstance: vk.PfnDestroyInstance,
     vkEnumeratePhysicalDevices: vk.PfnEnumeratePhysicalDevices,
     vkDestroySurfaceKHR: vk.PfnDestroySurfaceKHR,
@@ -27,9 +27,23 @@ const InstanceDispatch = struct {
     usingnamespace vk.InstanceWrapper(@This());
 };
 
-const DeviceDispatch = struct {
+pub const DeviceDispatch = struct {
     vkDestroyDevice: vk.PfnDestroyDevice,
     vkGetDeviceQueue: vk.PfnGetDeviceQueue,
+    vkQueueSubmit: vk.PfnQueueSubmit,
+    vkQueuePresentKHR: vk.PfnQueuePresentKHR,
+    vkCreateSwapchainKHR: vk.PfnCreateSwapchainKHR,
+    vkGetSwapchainImagesKHR: vk.PfnGetSwapchainImagesKHR,
+    vkAcquireNextImageKHR: vk.PfnAcquireNextImageKHR,
+    vkDestroySwapchainKHR: vk.PfnDestroySwapchainKHR,
+    vkCreateImageView: vk.PfnCreateImageView,
+    vkDestroyImageView: vk.PfnDestroyImageView,
+    vkCreateSemaphore: vk.PfnCreateSemaphore,
+    vkDestroySemaphore: vk.PfnDestroySemaphore,
+    vkCreateFence: vk.PfnCreateFence,
+    vkDestroyFence: vk.PfnDestroyFence,
+    vkWaitForFences: vk.PfnWaitForFences,
+    vkResetFences: vk.PfnResetFences,
 
     usingnamespace vk.DeviceWrapper(@This());
 };
@@ -366,6 +380,6 @@ pub const Device = struct {
     }
 
     pub fn deinit(self: Device) void {
-        self.vkd.destroyDevice(self.handle);
+        self.vkd.destroyDevice(self.handle, null);
     }
 };
