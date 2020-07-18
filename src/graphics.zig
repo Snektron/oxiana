@@ -318,8 +318,10 @@ pub const Device = struct {
 
         for (families) |family| {
             for (qci_buffer[0 .. n_unique_families]) |*qci| {
-                if (qci.queue_family_index == family and qci.queue_count < qalloc.family_propsv[family].queue_count) {
-                    qci.queue_count += 1;
+                if (qci.queue_family_index == family) {
+                    if (qci.queue_count < qalloc.family_propsv[family].queue_count) {
+                        qci.queue_count += 1;
+                    }
                     break;
                 }
             } else {
