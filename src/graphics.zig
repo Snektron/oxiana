@@ -44,6 +44,12 @@ pub const DeviceDispatch = struct {
     vkDestroyFence: vk.PfnDestroyFence,
     vkWaitForFences: vk.PfnWaitForFences,
     vkResetFences: vk.PfnResetFences,
+    vkCreatePipelineLayout: vk.PfnCreatePipelineLayout,
+    vkDestroyPipelineLayout: vk.PfnDestroyPipelineLayout,
+    vkCreateCommandPool: vk.PfnCreateCommandPool,
+    vkDestroyCommandPool: vk.PfnDestroyCommandPool,
+    vkAllocateCommandBuffers: vk.PfnAllocateCommandBuffers,
+    vkFreeCommandBuffers: vk.PfnFreeCommandBuffers,
 
     usingnamespace vk.DeviceWrapper(@This());
 };
@@ -313,7 +319,7 @@ pub const Device = struct {
         const families = [_]u32{qalloc.graphics_family, qalloc.compute_family, qalloc.present_family};
         const priorities = [_]f32{1} ** families.len;
 
-        var qci_buffer: [3]vk.DeviceQueueCreateInfo = undefined;
+        var qci_buffer: [families.len]vk.DeviceQueueCreateInfo = undefined;
         var n_unique_families: u32 = 0;
 
         for (families) |family| {

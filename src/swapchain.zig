@@ -1,8 +1,8 @@
 const std = @import("std");
 const vk = @import("vulkan");
-const graphics = @import("graphics.zig");
-const Instance = graphics.Instance;
-const Device = graphics.Device;
+const gfx = @import("graphics.zig");
+const Instance = gfx.Instance;
+const Device = gfx.Device;
 const Allocator = std.mem.Allocator;
 
 pub const Swapchain = struct {
@@ -221,7 +221,7 @@ pub const Swapchain = struct {
     }
 };
 
-fn findSurfaceFormat(vki: graphics.InstanceDispatch, pdev: vk.PhysicalDevice, surface: vk.SurfaceKHR, allocator: *Allocator) !vk.SurfaceFormatKHR {
+fn findSurfaceFormat(vki: gfx.InstanceDispatch, pdev: vk.PhysicalDevice, surface: vk.SurfaceKHR, allocator: *Allocator) !vk.SurfaceFormatKHR {
     var count: u32 = undefined;
     _ = try vki.getPhysicalDeviceSurfaceFormatsKHR(pdev, surface, &count, null);
     const surface_formats = try allocator.alloc(vk.SurfaceFormatKHR, count);
@@ -241,7 +241,7 @@ fn findSurfaceFormat(vki: graphics.InstanceDispatch, pdev: vk.PhysicalDevice, su
     return surface_formats[0]; // There must always be at least one supported surface format
 }
 
-fn findPresentMode(vki: graphics.InstanceDispatch, pdev: vk.PhysicalDevice, surface: vk.SurfaceKHR, allocator: *Allocator) !vk.PresentModeKHR {
+fn findPresentMode(vki: gfx.InstanceDispatch, pdev: vk.PhysicalDevice, surface: vk.SurfaceKHR, allocator: *Allocator) !vk.PresentModeKHR {
     var count: u32 = undefined;
     _ = try vki.getPhysicalDeviceSurfacePresentModesKHR(pdev, surface, &count, null);
     const present_modes = try allocator.alloc(vk.PresentModeKHR, count);
