@@ -37,6 +37,7 @@ pub const Renderer = struct {
             self.allocator.free(self.cmd_bufs);
             self.dev.vkd.destroyCommandPool(self.dev.handle, self.cmd_pool, null);
         }
+        self.dev.vkd.destroyPipeline(self.dev.handle, self.pipeline, null);
         self.dev.vkd.destroyPipelineLayout(self.dev.handle, self.pipeline_layout, null);
     }
 
