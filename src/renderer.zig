@@ -5,10 +5,22 @@ const Swapchain = @import("swapchain.zig").Swapchain;
 const resources = @import("resources");
 const Allocator = std.mem.Allocator;
 
+// Thus must kept in sync with the bindings in shaders/traverse.comp
+const bindings = [_]vk.DescriptorSetLayoutBinding{
+    .{ // layout(binding = 0, rgba8) restrict writeonly uniform image2D render_target;
+        .binding = 0,
+        .descriptor_type = .storage_image,
+        .descriptor_count = 1,
+        .stage_flags = .{.compute_bit = true},
+        .p_immutable_samplers = null,
+    },
+};
+
 pub const Renderer = struct {
     allocator: *Allocator,
     dev: *const gfx.Device,
 
+    descriptor_set_layout: vk.DescriptorSetLayout,
     pipeline_layout: vk.PipelineLayout,
     pipeline: vk.Pipeline,
 
@@ -19,6 +31,7 @@ pub const Renderer = struct {
         var self = Renderer{
             .allocator = allocator,
             .dev = dev,
+            .descriptor_set_layout = .null_handle,
             .pipeline_layout = .null_handle,
             .pipeline = .null_handle,
             .cmd_pool = .null_handle,
@@ -40,13 +53,20 @@ pub const Renderer = struct {
         }
         self.dev.vkd.destroyPipeline(self.dev.handle, self.pipeline, null);
         self.dev.vkd.destroyPipelineLayout(self.dev.handle, self.pipeline_layout, null);
+        self.dev.vkd.destroyDescriptorSetLayout(self.dev.handle, self.descriptor_set_layout, null);
     }
 
     fn createPipeline(self: *Renderer) !void {
+        self.descriptor_set_layout = try self.dev.vkd.createDescriptorSetLayout(self.dev.handle, .{
+            .flags = .{},
+            .binding_count = @intCast(u32, bindings.len),
+            .p_bindings = &bindings,
+        }, null);
+
         self.pipeline_layout = try self.dev.vkd.createPipelineLayout(self.dev.handle, .{
             .flags = .{},
-            .set_layout_count = 0,
-            .p_set_layouts = undefined,
+            .set_layout_count = 1,
+            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &self.descriptor_set_layout),
             .push_constant_range_count = 0,
             .p_push_constant_ranges = undefined,
         }, null);

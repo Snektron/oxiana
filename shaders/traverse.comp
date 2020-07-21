@@ -1,0 +1,14 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba8) restrict writeonly uniform image2D render_target;
+
+void main() {
+    uvec2 index = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(index, imageSize(render_target)))) {
+        return;
+    }
+
+    imageStore(render_target, ivec2(index), vec4(1, 0, 1, 1));
+}

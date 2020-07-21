@@ -50,6 +50,8 @@ pub const DeviceDispatch = struct {
     vkDestroyCommandPool: vk.PfnDestroyCommandPool,
     vkAllocateCommandBuffers: vk.PfnAllocateCommandBuffers,
     vkFreeCommandBuffers: vk.PfnFreeCommandBuffers,
+    vkCreateDescriptorSetLayout: vk.PfnCreateDescriptorSetLayout,
+    vkDestroyDescriptorSetLayout: vk.PfnDestroyDescriptorSetLayout,
     vkCreateShaderModule: vk.PfnCreateShaderModule,
     vkDestroyShaderModule: vk.PfnDestroyShaderModule,
     vkCreateComputePipelines: vk.PfnCreateComputePipelines,
