@@ -24,6 +24,8 @@ pub const Renderer = struct {
     pipeline_layout: vk.PipelineLayout,
     pipeline: vk.Pipeline,
 
+    descriptor_pool: vk.DescriptorPool,
+
     cmd_pool: vk.CommandPool,
     cmd_bufs: []vk.CommandBuffer,
 
@@ -34,12 +36,14 @@ pub const Renderer = struct {
             .descriptor_set_layout = .null_handle,
             .pipeline_layout = .null_handle,
             .pipeline = .null_handle,
+            .descriptor_pool = .null_handle,
             .cmd_pool = .null_handle,
             .cmd_bufs = &[_]vk.CommandBuffer{},
         };
         errdefer self.deinit();
 
         try self.createPipeline();
+        try self.createDescriptorSet(swapchain);
         try self.createCommandBuffers(swapchain);
 
         return self;
@@ -51,6 +55,7 @@ pub const Renderer = struct {
             self.allocator.free(self.cmd_bufs);
             self.dev.vkd.destroyCommandPool(self.dev.handle, self.cmd_pool, null);
         }
+        self.dev.vkd.destroyDescriptorPool(self.dev.handle, self.descriptor_pool, null);
         self.dev.vkd.destroyPipeline(self.dev.handle, self.pipeline, null);
         self.dev.vkd.destroyPipelineLayout(self.dev.handle, self.pipeline_layout, null);
         self.dev.vkd.destroyDescriptorSetLayout(self.dev.handle, self.descriptor_set_layout, null);
@@ -100,6 +105,34 @@ pub const Renderer = struct {
             null,
             @ptrCast([*]vk.Pipeline, &self.pipeline),
         );
+    }
+
+    fn createDescriptorSet(self: *Renderer, swapchain: *const Swapchain) !void {
+        const n_swap_images = @intCast(u32, swapchain.swap_images.len);
+        var pool_sizes: [bindings.len]vk.DescriptorPoolSize = undefined;
+        var n_pool_sizes: u32 = 0;
+
+        for (bindings) |binding| {
+            for (pool_sizes[0 .. n_pool_sizes]) |*pool_size| {
+                if (pool_size.@"type" == binding.descriptor_type) {
+                    pool_size.descriptor_count += binding.descriptor_count * n_swap_images;
+                    break;
+                }
+            } else {
+                pool_sizes[n_pool_sizes] = .{
+                    .@"type" = binding.descriptor_type,
+                    .descriptor_count = binding.descriptor_count * n_swap_images,
+                };
+                n_pool_sizes += 1;
+            }
+        }
+
+        self.descriptor_pool = try self.dev.vkd.createDescriptorPool(self.dev.handle, .{
+            .flags = .{},
+            .max_sets = n_swap_images,
+            .pool_size_count = n_pool_sizes,
+            .p_pool_sizes = &pool_sizes,
+        }, null);
     }
 
     fn createCommandBuffers(self: *Renderer, swapchain: *const Swapchain) !void {

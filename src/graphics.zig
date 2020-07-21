@@ -56,6 +56,8 @@ pub const DeviceDispatch = struct {
     vkDestroyShaderModule: vk.PfnDestroyShaderModule,
     vkCreateComputePipelines: vk.PfnCreateComputePipelines,
     vkDestroyPipeline: vk.PfnDestroyPipeline,
+    vkCreateDescriptorPool: vk.PfnCreateDescriptorPool,
+    vkDestroyDescriptorPool: vk.PfnDestroyDescriptorPool,
 
     usingnamespace vk.DeviceWrapper(@This());
 };
