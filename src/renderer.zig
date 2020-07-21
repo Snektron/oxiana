@@ -2,6 +2,7 @@ const std = @import("std");
 const vk = @import("vulkan");
 const gfx = @import("graphics.zig");
 const Swapchain = @import("swapchain.zig").Swapchain;
+const resources = @import("resources");
 const Allocator = std.mem.Allocator;
 
 pub const Renderer = struct {
@@ -49,6 +50,36 @@ pub const Renderer = struct {
             .push_constant_range_count = 0,
             .p_push_constant_ranges = undefined,
         }, null);
+
+        const traversal_shader = try self.dev.vkd.createShaderModule(self.dev.handle, .{
+            .flags = .{},
+            .code_size = resources.traverse_comp.len,
+            .p_code = @ptrCast([*]const u32, resources.traverse_comp),
+        }, null);
+        defer self.dev.vkd.destroyShaderModule(self.dev.handle, traversal_shader, null);
+
+        const cpci = vk.ComputePipelineCreateInfo{
+            .flags = .{},
+            .stage = .{
+                .flags = .{},
+                .stage = .{.compute_bit = true},
+                .module = traversal_shader,
+                .p_name = "main",
+                .p_specialization_info = null,
+            },
+            .layout = self.pipeline_layout,
+            .base_pipeline_handle = .null_handle,
+            .base_pipeline_index = 0,
+        };
+
+        _ = try self.dev.vkd.createComputePipelines(
+            self.dev.handle,
+            .null_handle,
+            1,
+            @ptrCast([*]const vk.ComputePipelineCreateInfo, &cpci),
+            null,
+            @ptrCast([*]vk.Pipeline, &self.pipeline),
+        );
     }
 
     fn createCommandBuffers(self: *Renderer, swapchain: *const Swapchain) !void {

@@ -67,6 +67,7 @@ pub fn build(b: *Builder) void {
     exe.addPackagePath("vulkan", vk_gen_step.full_out_path);
 
     const res = ResourceGenStep.init(b, "resources.zig");
+    res.addShader("traverse_comp", "shaders/traverse.comp");
     exe.step.dependOn(&res.step);
     exe.addPackagePath("resources", res.full_out_path);
 
