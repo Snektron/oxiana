@@ -25,6 +25,7 @@ pub const Renderer = struct {
     pipeline: vk.Pipeline,
 
     descriptor_pool: vk.DescriptorPool,
+    descriptor_sets: []vk.DescriptorSet,
 
     cmd_pool: vk.CommandPool,
     cmd_bufs: []vk.CommandBuffer,
@@ -37,6 +38,7 @@ pub const Renderer = struct {
             .pipeline_layout = .null_handle,
             .pipeline = .null_handle,
             .descriptor_pool = .null_handle,
+            .descriptor_sets = &[_]vk.DescriptorSet{},
             .cmd_pool = .null_handle,
             .cmd_bufs = &[_]vk.CommandBuffer{},
         };
@@ -50,12 +52,17 @@ pub const Renderer = struct {
     }
 
     pub fn deinit(self: Renderer) void {
-        if (self.cmd_pool != .null_handle) {
+        if (self.cmd_bufs.len != 0) {
             self.dev.vkd.freeCommandBuffers(self.dev.handle, self.cmd_pool, @truncate(u32, self.cmd_bufs.len), self.cmd_bufs.ptr);
             self.allocator.free(self.cmd_bufs);
-            self.dev.vkd.destroyCommandPool(self.dev.handle, self.cmd_pool, null);
         }
+        self.dev.vkd.destroyCommandPool(self.dev.handle, self.cmd_pool, null);
+        
+        // Descriptor sets do not need to be free'd explicitly - this happens automatically when the pool they are allocated
+        // from is destroyed.
+        self.allocator.free(self.descriptor_sets);
         self.dev.vkd.destroyDescriptorPool(self.dev.handle, self.descriptor_pool, null);
+
         self.dev.vkd.destroyPipeline(self.dev.handle, self.pipeline, null);
         self.dev.vkd.destroyPipelineLayout(self.dev.handle, self.pipeline_layout, null);
         self.dev.vkd.destroyDescriptorSetLayout(self.dev.handle, self.descriptor_set_layout, null);
@@ -133,6 +140,21 @@ pub const Renderer = struct {
             .pool_size_count = n_pool_sizes,
             .p_pool_sizes = &pool_sizes,
         }, null);
+
+        const layouts = try self.allocator.alloc(vk.DescriptorSetLayout, n_swap_images);
+        defer self.allocator.free(layouts);
+
+        for (layouts) |*layout| layout.* = self.descriptor_set_layout;
+
+        const descriptor_sets = try self.allocator.alloc(vk.DescriptorSet, n_swap_images);
+        errdefer self.allocator.free(descriptor_sets);  
+
+        try self.dev.vkd.allocateDescriptorSets(self.dev.handle, .{
+            .descriptor_pool = self.descriptor_pool,
+            .descriptor_set_count = @truncate(u32, layouts.len),
+            .p_set_layouts = layouts.ptr,
+        }, descriptor_sets.ptr);
+        self.descriptor_sets = descriptor_sets;
     }
 
     fn createCommandBuffers(self: *Renderer, swapchain: *const Swapchain) !void {
