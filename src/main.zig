@@ -53,7 +53,10 @@ pub fn main() !void {
 
     std.log.info(.main, "Using device '{}'\n", .{device.pdev.name()});
 
-    var swapchain = try Swapchain.init(&instance, &device, allocator, extent, surface);
+    var swapchain = try Swapchain.init(&instance, &device, allocator, extent, .{
+        .surface = surface,
+        .swap_image_usage = .{.storage_bit = true},
+    });
     defer swapchain.deinit();
 
     var renderer = try Renderer.init(allocator, &device, &swapchain);

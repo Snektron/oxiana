@@ -11,10 +11,14 @@ pub const Swapchain = struct {
         suboptimal
     };
 
+    pub const CreateInfo = struct {
+        surface: vk.SurfaceKHR,
+        swap_image_usage: vk.ImageUsageFlags = .{.color_attachment_bit = true},
+    };
+
     instance: *const Instance,
     dev: *const Device,
     allocator: *Allocator,
-    surface: vk.SurfaceKHR,
 
     surface_format: vk.SurfaceFormatKHR,
     present_mode: vk.PresentModeKHR,
@@ -25,12 +29,11 @@ pub const Swapchain = struct {
     image_index: u32,
     next_image_acquired: vk.Semaphore,
 
-    pub fn init(instance: *const Instance, dev: *const Device, allocator: *Allocator, extent: vk.Extent2D, surface: vk.SurfaceKHR) !Swapchain {
+    pub fn init(instance: *const Instance, dev: *const Device, allocator: *Allocator, extent: vk.Extent2D, create_info: CreateInfo) !Swapchain {
         var self = Swapchain{
             .instance = instance,
             .dev = dev,
             .allocator = allocator,
-            .surface = surface,
             .surface_format = undefined,
             .present_mode = undefined,
             .extent = undefined,
@@ -41,7 +44,7 @@ pub const Swapchain = struct {
         };
         errdefer dev.vkd.destroySemaphore(dev.handle, self.next_image_acquired, null);
 
-        try self.recreate(extent);
+        try self.recreate(extent, create_info);
         return self;
     }
 
@@ -53,15 +56,19 @@ pub const Swapchain = struct {
 
     // If this fails, the swapchain is in an undefined but invalid state: `deinit` and `recreate`
     // can still be called.
-    fn recreate(self: *Swapchain, new_extent: vk.Extent2D) !void {
+    fn recreate(self: *Swapchain, new_extent: vk.Extent2D, create_info: CreateInfo) !void {
         const pdev = self.dev.pdev.handle;
-        self.surface_format = try findSurfaceFormat(self.instance.vki, pdev, self.surface, self.allocator);
-        self.present_mode = try findPresentMode(self.instance.vki, pdev, self.surface, self.allocator);
-        const caps = try self.instance.vki.getPhysicalDeviceSurfaceCapabilitiesKHR(pdev, self.surface);
+        self.surface_format = try findSurfaceFormat(self.instance.vki, pdev, create_info, self.allocator);
+        self.present_mode = try findPresentMode(self.instance.vki, pdev, create_info.surface, self.allocator);
+        const caps = try self.instance.vki.getPhysicalDeviceSurfaceCapabilitiesKHR(pdev, create_info.surface);
         self.extent = findActualExtent(caps, new_extent);
 
         if (self.extent.width == 0 or self.extent.height == 0) {
             return error.InvalidSurfaceDimensions;
+        }
+
+        if (!caps.supported_usage_flags.contains(create_info.swap_image_usage)) {
+            return error.UnsupportedSwapImageUsage;
         }
 
         var image_count = caps.min_image_count + 1;
@@ -75,13 +82,13 @@ pub const Swapchain = struct {
         const old_handle = self.handle;
         self.handle = try self.dev.vkd.createSwapchainKHR(self.dev.handle, .{
             .flags = .{},
-            .surface = self.surface,
+            .surface = create_info.surface,
             .min_image_count = image_count,
             .image_format = self.surface_format.format,
             .image_color_space = self.surface_format.color_space,
             .image_extent = self.extent,
             .image_array_layers = 1,
-            .image_usage = .{.color_attachment_bit = true, .transfer_dst_bit = true}, // TODO
+            .image_usage = create_info.swap_image_usage,
             .image_sharing_mode = if (concurrent) .concurrent else .exclusive,
             .queue_family_index_count = qfi.len,
             .p_queue_family_indices = &qfi,
@@ -221,24 +228,43 @@ pub const Swapchain = struct {
     }
 };
 
-fn findSurfaceFormat(vki: gfx.InstanceDispatch, pdev: vk.PhysicalDevice, surface: vk.SurfaceKHR, allocator: *Allocator) !vk.SurfaceFormatKHR {
+fn findSurfaceFormat(vki: gfx.InstanceDispatch, pdev: vk.PhysicalDevice, create_info: Swapchain.CreateInfo, allocator: *Allocator) !vk.SurfaceFormatKHR {
     var count: u32 = undefined;
-    _ = try vki.getPhysicalDeviceSurfaceFormatsKHR(pdev, surface, &count, null);
+    _ = try vki.getPhysicalDeviceSurfaceFormatsKHR(pdev, create_info.surface, &count, null);
     const surface_formats = try allocator.alloc(vk.SurfaceFormatKHR, count);
     defer allocator.free(surface_formats);
-    _ = try vki.getPhysicalDeviceSurfaceFormatsKHR(pdev, surface, &count, surface_formats.ptr);
+    _ = try vki.getPhysicalDeviceSurfaceFormatsKHR(pdev, create_info.surface, &count, surface_formats.ptr);
+
+    // According to https://www.khronos.org/registry/vulkan/specs/1.2-extensions/html/vkspec.html#VUID-VkImageViewCreateInfo-usage-02274
+    var required_format_features: vk.FormatFeatureFlags = .{
+        .sampled_image_bit = create_info.swap_image_usage.sampled_bit,
+        .storage_image_bit = create_info.swap_image_usage.storage_bit,
+        .color_attachment_bit = create_info.swap_image_usage.color_attachment_bit,
+        .depth_stencil_attachment_bit = create_info.swap_image_usage.depth_stencil_attachment_bit,
+    };
 
     const preferred = vk.SurfaceFormatKHR{
         .format = .b8g8r8a8_srgb,
         .color_space = .srgb_nonlinear_khr,
     };
+    var surface_format: ?vk.SurfaceFormatKHR = null;
+
     for (surface_formats) |sfmt| {
+        const fprops = vki.getPhysicalDeviceFormatProperties(pdev, sfmt.format);
+        // According to the spec, swapchain images are always created with optimal tiling.
+        const tiling_features = fprops.optimal_tiling_features;
+        if (!tiling_features.contains(required_format_features)) {
+            continue;
+        }
+
         if (std.meta.eql(sfmt, preferred)) {
             return preferred;
+        } else if (surface_format == null) {
+            surface_format = sfmt;
         }
     }
 
-    return surface_formats[0]; // There must always be at least one supported surface format
+    return surface_format orelse error.NoSurfaceFormat;
 }
 
 fn findPresentMode(vki: gfx.InstanceDispatch, pdev: vk.PhysicalDevice, surface: vk.SurfaceKHR, allocator: *Allocator) !vk.PresentModeKHR {
