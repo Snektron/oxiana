@@ -47,6 +47,8 @@ pub const Renderer = struct {
         try self.createPipeline();
         try self.createDescriptorSet(swapchain);
         try self.createCommandBuffers(swapchain);
+        // Resource creation done at this point
+        self.updateDescriptorSets(swapchain);
 
         return self;
     }
@@ -172,5 +174,31 @@ pub const Renderer = struct {
             .command_buffer_count = @truncate(u32, cmd_bufs.len),
         }, cmd_bufs.ptr);
         self.cmd_bufs = cmd_bufs;
+    }
+
+    fn updateDescriptorSets(self: *Renderer, swapchain: *const Swapchain) void {
+        for (self.descriptor_sets) |set, i| {
+            const render_target_write = vk.DescriptorImageInfo{
+                .sampler = .null_handle,
+                .image_view = swapchain.swap_images[i].view,
+                .image_layout = .general,
+            };
+
+            const writes = [_]vk.WriteDescriptorSet{
+                .{
+                    .dst_set = set,
+                    .dst_binding = bindings[0].binding,
+                    .dst_array_element = 0,
+                    .descriptor_count = 1,
+                    .descriptor_type = bindings[0].descriptor_type,
+                    .p_image_info = @ptrCast([*]const vk.DescriptorImageInfo, &render_target_write),
+                    .p_buffer_info = undefined,
+                    .p_texel_buffer_view = undefined,
+                },
+            };
+
+            // Could do a single updateDescriptorSets, but that would require allocating an array of writes.
+            self.dev.vkd.updateDescriptorSets(self.dev.handle, @intCast(u32, writes.len), &writes, 0, undefined);
+        }
     }
 };

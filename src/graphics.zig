@@ -59,6 +59,7 @@ pub const DeviceDispatch = struct {
     vkCreateDescriptorPool: vk.PfnCreateDescriptorPool,
     vkDestroyDescriptorPool: vk.PfnDestroyDescriptorPool,
     vkAllocateDescriptorSets: vk.PfnAllocateDescriptorSets,
+    vkUpdateDescriptorSets: vk.PfnUpdateDescriptorSets,
 
     usingnamespace vk.DeviceWrapper(@This());
 };
