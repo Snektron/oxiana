@@ -51,11 +51,11 @@ pub fn main() !void {
     const device = try instance.findAndCreateDevice(allocator, surface, required_device_extensions);
     defer device.deinit();
 
-    std.log.info(.main, "Using device '{}'\n", .{device.pdev.name()});
+    std.log.info(.main, "Using device '{}'", .{device.pdev.name()});
 
     var swapchain = try Swapchain.init(&instance, &device, allocator, extent, .{
         .surface = surface,
-        .swap_image_usage = .{.storage_bit = true},
+        .swap_image_usage = .{.transfer_dst_bit = true},
     });
     defer swapchain.deinit();
 

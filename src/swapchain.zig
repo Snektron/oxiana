@@ -13,7 +13,8 @@ pub const Swapchain = struct {
 
     pub const CreateInfo = struct {
         surface: vk.SurfaceKHR,
-        swap_image_usage: vk.ImageUsageFlags = .{.color_attachment_bit = true},
+        swap_image_usage: vk.ImageUsageFlags,
+        format_features: vk.FormatFeatureFlags = .{},
     };
 
     instance: *const Instance,
@@ -226,6 +227,23 @@ pub const Swapchain = struct {
             else => unreachable,
         };
     }
+
+    fn createSwapImageView(self: Swapchain, image_index: u32) !vk.ImageView {
+        return try self.dev.vkd.createImageView(self.dev.handle, .{
+            .flags = .{},
+            .image = self.swap_images[i].image,
+            .view_type = .@"2d",
+            .format = self.format,
+            .components = .{.r = .identity, .g = .identity, .b = .identity, .a = .identity},
+            .subresource_range = .{
+                .aspect_mask = .{.color_bit = true},
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1, // SwapchainCreateInfo.image_array_layers
+            },
+        }, null);
+    }
 };
 
 fn findSurfaceFormat(vki: gfx.InstanceDispatch, pdev: vk.PhysicalDevice, create_info: Swapchain.CreateInfo, allocator: *Allocator) !vk.SurfaceFormatKHR {
@@ -236,12 +254,14 @@ fn findSurfaceFormat(vki: gfx.InstanceDispatch, pdev: vk.PhysicalDevice, create_
     _ = try vki.getPhysicalDeviceSurfaceFormatsKHR(pdev, create_info.surface, &count, surface_formats.ptr);
 
     // According to https://www.khronos.org/registry/vulkan/specs/1.2-extensions/html/vkspec.html#VUID-VkImageViewCreateInfo-usage-02274
-    var required_format_features: vk.FormatFeatureFlags = .{
+    const required_format_features = create_info.format_features.merge(.{
         .sampled_image_bit = create_info.swap_image_usage.sampled_bit,
         .storage_image_bit = create_info.swap_image_usage.storage_bit,
         .color_attachment_bit = create_info.swap_image_usage.color_attachment_bit,
         .depth_stencil_attachment_bit = create_info.swap_image_usage.depth_stencil_attachment_bit,
-    };
+        .transfer_src_bit = create_info.swap_image_usage.transfer_src_bit,
+        .transfer_dst_bit = create_info.swap_image_usage.transfer_dst_bit,
+    });
 
     const preferred = vk.SurfaceFormatKHR{
         .format = .b8g8r8a8_srgb,
@@ -301,28 +321,11 @@ fn findActualExtent(caps: vk.SurfaceCapabilitiesKHR, extent: vk.Extent2D) vk.Ext
 
 const SwapImage = struct {
     image: vk.Image,
-    view: vk.ImageView,
     image_acquired: vk.Semaphore,
     render_finished: vk.Semaphore,
     frame_fence: vk.Fence,
 
     fn init(dev: *const Device, image: vk.Image, format: vk.Format) !SwapImage {
-        const view = try dev.vkd.createImageView(dev.handle, .{
-            .flags = .{},
-            .image = image,
-            .view_type = .@"2d",
-            .format = format,
-            .components = .{.r = .identity, .g = .identity, .b = .identity, .a = .identity},
-            .subresource_range = .{
-                .aspect_mask = .{.color_bit = true},
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-        }, null);
-        errdefer dev.vkd.destroyImageView(dev.handle, view, null);
-
         const image_acquired = try dev.vkd.createSemaphore(dev.handle, .{.flags = .{}}, null);
         errdefer dev.vkd.destroySemaphore(dev.handle, image_acquired, null);
 
@@ -334,7 +337,6 @@ const SwapImage = struct {
 
         return SwapImage{
             .image = image,
-            .view = view,
             .image_acquired = image_acquired,
             .render_finished = render_finished,
             .frame_fence = frame_fence,
@@ -343,7 +345,6 @@ const SwapImage = struct {
 
     fn deinit(self: SwapImage, dev: *const Device) void {
         self.waitForFence(dev) catch return;
-        dev.vkd.destroyImageView(dev.handle, self.view, null);
         dev.vkd.destroySemaphore(dev.handle, self.image_acquired, null);
         dev.vkd.destroySemaphore(dev.handle, self.render_finished, null);
         dev.vkd.destroyFence(dev.handle, self.frame_fence, null);
