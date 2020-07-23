@@ -30,6 +30,9 @@ pub const Renderer = struct {
     cmd_pool: vk.CommandPool,
     cmd_bufs: []vk.CommandBuffer,
 
+    render_targets: []vk.Image,
+    render_target_views: []vk.ImageView,
+
     pub fn init(allocator: *Allocator, dev: *const gfx.Device, swapchain: *const Swapchain) !Renderer {
         var self = Renderer{
             .allocator = allocator,
@@ -41,27 +44,33 @@ pub const Renderer = struct {
             .descriptor_sets = &[_]vk.DescriptorSet{},
             .cmd_pool = .null_handle,
             .cmd_bufs = &[_]vk.CommandBuffer{},
+            .render_targets = &[_]vk.Image{},
+            .render_target_views = &[_]vk.ImageView{},
         };
         errdefer self.deinit();
 
+        const n_swap_images = @truncate(u32, swapchain.swap_images.len);
+
         try self.createPipeline();
-        try self.createDescriptorSet(swapchain);
-        try self.createCommandBuffers(swapchain);
+        try self.createDescriptorSet(n_swap_images);
+        try self.createCommandBuffers(n_swap_images);
+        try self.createRenderTargets(n_swap_images);
         // Resource creation done at this point
-        self.updateDescriptorSets(swapchain);
+        self.updateDescriptorSets();
 
         return self;
     }
 
     pub fn deinit(self: Renderer) void {
-        if (self.cmd_bufs.len != 0) {
-            self.dev.vkd.freeCommandBuffers(self.dev.handle, self.cmd_pool, @truncate(u32, self.cmd_bufs.len), self.cmd_bufs.ptr);
-            self.allocator.free(self.cmd_bufs);
-        }
+        self.allocator.free(self.render_targets);
+        self.allocator.free(self.render_target_views);
+
+        // Command buffers do not need to be free'd explicitly - this happens automatically when the pool they are allocated
+        // from is destroyed.
+        self.allocator.free(self.cmd_bufs);
         self.dev.vkd.destroyCommandPool(self.dev.handle, self.cmd_pool, null);
         
-        // Descriptor sets do not need to be free'd explicitly - this happens automatically when the pool they are allocated
-        // from is destroyed.
+        // Similar to command buffers, descriptor sets do not need to be free'd.
         self.allocator.free(self.descriptor_sets);
         self.dev.vkd.destroyDescriptorPool(self.dev.handle, self.descriptor_pool, null);
 
@@ -116,8 +125,7 @@ pub const Renderer = struct {
         );
     }
 
-    fn createDescriptorSet(self: *Renderer, swapchain: *const Swapchain) !void {
-        const n_swap_images = @intCast(u32, swapchain.swap_images.len);
+    fn createDescriptorSet(self: *Renderer, n_swap_images: u32) !void {
         var pool_sizes: [bindings.len]vk.DescriptorPoolSize = undefined;
         var n_pool_sizes: u32 = 0;
 
@@ -159,13 +167,13 @@ pub const Renderer = struct {
         self.descriptor_sets = descriptor_sets;
     }
 
-    fn createCommandBuffers(self: *Renderer, swapchain: *const Swapchain) !void {
+    fn createCommandBuffers(self: *Renderer, n_swap_images: u32) !void {
         self.cmd_pool = try self.dev.vkd.createCommandPool(self.dev.handle, .{
-            .flags = .{},
+            .flags = .{.reset_command_buffer_bit = true},
             .queue_family_index = self.dev.compute_queue.family,
         }, null);
 
-        const cmd_bufs = try self.allocator.alloc(vk.CommandBuffer, swapchain.swap_images.len);
+        const cmd_bufs = try self.allocator.alloc(vk.CommandBuffer, n_swap_images);
         errdefer self.allocator.free(cmd_bufs);
 
         try self.dev.vkd.allocateCommandBuffers(self.dev.handle, .{
@@ -176,11 +184,15 @@ pub const Renderer = struct {
         self.cmd_bufs = cmd_bufs;
     }
 
-    fn updateDescriptorSets(self: *Renderer, swapchain: *const Swapchain) void {
+    fn createRenderTargets(self: *Renderer, n_swap_images: u32) !void {
+
+    }
+
+    fn updateDescriptorSets(self: *Renderer) void {
         for (self.descriptor_sets) |set, i| {
             const render_target_write = vk.DescriptorImageInfo{
                 .sampler = .null_handle,
-                .image_view = .null_handle,
+                .image_view = .null_handke, // self.render_target_views[i],
                 .image_layout = .general,
             };
 
