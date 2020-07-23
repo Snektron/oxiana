@@ -1,6 +1,7 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const gfx = @import("graphics.zig");
+const StructOfArrays = @import("soa.zig").StructOfArrays;
 const Instance = gfx.Instance;
 const Device = gfx.Device;
 const Allocator = std.mem.Allocator;
@@ -17,6 +18,13 @@ pub const Swapchain = struct {
         format_features: vk.FormatFeatureFlags = .{},
     };
 
+    const SwapImageArray = StructOfArrays(struct {
+        image: vk.Image,
+        image_acquired: vk.Semaphore,
+        render_finished: vk.Semaphore,
+        frame_fence: vk.Fence,
+    });
+
     instance: *const Instance,
     dev: *const Device,
     allocator: *Allocator,
@@ -26,7 +34,8 @@ pub const Swapchain = struct {
     extent: vk.Extent2D,
     handle: vk.SwapchainKHR,
 
-    swap_images: []SwapImage,
+    swap_images: SwapImageArray,
+
     image_index: u32,
     next_image_acquired: vk.Semaphore,
 
@@ -39,7 +48,7 @@ pub const Swapchain = struct {
             .present_mode = undefined,
             .extent = undefined,
             .handle = .null_handle,
-            .swap_images = &[_]SwapImage{},
+            .swap_images = SwapImageArray.empty(allocator),
             .image_index = undefined,
             .next_image_acquired = try dev.vkd.createSemaphore(dev.handle, .{.flags = .{}}, null),
         };
@@ -50,7 +59,7 @@ pub const Swapchain = struct {
     }
 
     pub fn deinit(self: Swapchain) void {
-        for (self.swap_images) |si| si.deinit(self.dev);
+        self.deinitSwapImageArray();
         self.dev.vkd.destroySemaphore(self.dev.handle, self.next_image_acquired, null);
         self.dev.vkd.destroySwapchainKHR(self.dev.handle, self.handle, null);
     }
@@ -119,48 +128,37 @@ pub const Swapchain = struct {
             return error.ImageAcquireFailed;
         }
 
-        std.mem.swap(vk.Semaphore, &self.swap_images[result.image_index].image_acquired, &self.next_image_acquired);
+        std.mem.swap(vk.Semaphore, self.swap_images.at("image_acquired", result.image_index), &self.next_image_acquired);
         self.image_index = result.image_index;
     }
 
     fn fetchSwapImages(self: *Swapchain) !void {
         var count: u32 = undefined;
         _ = try self.dev.vkd.getSwapchainImagesKHR(self.dev.handle, self.handle, &count, null);
-        const images = try self.allocator.alloc(vk.Image, count);
-        defer self.allocator.free(images);
-        _ = try self.dev.vkd.getSwapchainImagesKHR(self.dev.handle, self.handle, &count, images.ptr);
-
-        // Deinit old swap images, if any
-        for (self.swap_images) |si| si.deinit(self.dev);
 
         if (count != self.swap_images.len) {
-            self.swap_images = try self.allocator.realloc(self.swap_images, count);
+            // Play it safe for now and reinitialize everything - this is not likely to happen very often
+            self.deinitSwapImageArray();
+            self.swap_images.realloc(count) catch |err| {
+                // The items of the swap image array are already freed, if we were to simply
+                // return the error now, they would be free'd again in the deinit function, so simply free
+                // the swap images and set the size to 0.
+                self.swap_images.shrink(0);
+                return err;
+            };
+            try self.initSwapImageArray();
         }
 
-        var i: usize = 0;
-        errdefer {
-            for (self.swap_images[0 .. i]) |si| si.deinit(self.dev);
-
-            // Free the swap images to prevent double deinitialization of above swap images.
-            self.swap_images = self.allocator.shrink(self.swap_images, 0);
-        }
-
-        for (images) |image| {
-            self.swap_images[i] = try SwapImage.init(self.dev, image, self.surface_format.format);
-            i += 1;
-        }
+        _ = try self.dev.vkd.getSwapchainImagesKHR(self.dev.handle, self.handle, &count, self.swap_images.slice("image").ptr);
     }
 
     pub fn waitForAllFences(self: Swapchain) !void {
-        for (self.swap_images) |si| si.waitForFence(self.dev) catch {};
+        const fences = self.swap_images.slice("frame_fence");
+        _ = try self.dev.vkd.waitForFences(self.dev.handle, @truncate(u32, fences.len), fences.ptr, vk.TRUE, std.math.maxInt(u64));
     }
 
     pub fn currentImage(self: Swapchain) vk.Image {
-        return self.swap_images[self.image_index].image;
-    }
-
-    pub fn currentSwapImage(self: Swapchain) *const SwapImage {
-        return &self.swap_images[self.image_index];
+        return self.swap_images.at("image", self.image_index).*;
     }
 
     pub fn present(self: *Swapchain) !PresentState {
@@ -181,28 +179,31 @@ pub const Swapchain = struct {
         // One problem that arises is that we can't know beforehand which semaphore to signal,
         // so we keep an extra auxilery semaphore that is swapped around
 
+        const frame_fence = self.swap_images.get("frame_fence", self.image_index);
+        const image_acquired = self.swap_images.get("image_acquired", self.image_index);
+        const render_finished = self.swap_images.get("render_finished", self.image_index);
+
         // Step 1: Make sure the current frame has finished rendering
-        const current = self.currentSwapImage();
-        try current.waitForFence(self.dev);
-        try self.dev.vkd.resetFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &current.frame_fence));
+        _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, frame_fence), vk.TRUE, std.math.maxInt(u64));
+        try self.dev.vkd.resetFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, frame_fence));
 
         // Step 2: Submit the command buffer
         // TODO: Move somewhere else
         const wait_stage = [_]vk.PipelineStageFlags{.{.top_of_pipe_bit = true}};
         try self.dev.vkd.queueSubmit(self.dev.graphics_queue.handle, 1, &[_]vk.SubmitInfo{.{
             .wait_semaphore_count = 1,
-            .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &current.image_acquired),
+            .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, image_acquired),
             .p_wait_dst_stage_mask = &wait_stage,
             .command_buffer_count = 1,
             .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, &cmdbuf),
             .signal_semaphore_count = 1,
-            .p_signal_semaphores = @ptrCast([*]const vk.Semaphore, &current.render_finished),
+            .p_signal_semaphores = @ptrCast([*]const vk.Semaphore, render_finished),
         }}, current.frame_fence);
 
         // Step 3: Present the current frame
         _ = try self.dev.vkd.queuePresentKHR(self.dev.present_queue.handle, .{
             .wait_semaphore_count = 1,
-            .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &current.render_finished),
+            .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, render_finished),
             .swapchain_count = 1,
             .p_swapchains = @ptrCast([*]const vk.SwapchainKHR, &self.handle),
             .p_image_indices = @ptrCast([*]const u32, &self.image_index),
@@ -218,7 +219,7 @@ pub const Swapchain = struct {
             .null_handle,
         );
 
-        std.mem.swap(vk.Semaphore, &self.swap_images[result.image_index].image_acquired, &self.next_image_acquired);
+        std.mem.swap(vk.Semaphore, self.swap_images.at("image_acquired", result.image_index), &self.next_image_acquired);
         self.image_index = result.image_index;
 
         return switch (result.result) {
@@ -231,7 +232,7 @@ pub const Swapchain = struct {
     fn createSwapImageView(self: Swapchain, image_index: u32) !vk.ImageView {
         return try self.dev.vkd.createImageView(self.dev.handle, .{
             .flags = .{},
-            .image = self.swap_images[i].image,
+            .image = self.swap_images.at("image", i).*,
             .view_type = .@"2d",
             .format = self.format,
             .components = .{.r = .identity, .g = .identity, .b = .identity, .a = .identity},
@@ -243,6 +244,50 @@ pub const Swapchain = struct {
                 .layer_count = 1, // SwapchainCreateInfo.image_array_layers
             },
         }, null);
+    }
+
+    fn initSwapImageArray(self: *Swapchain) !void {
+        var i: usize = 0;
+        errdefer while (i > 0) {
+            i -= 1;
+            self.deinitSwapImage(i);
+        };
+
+        while (i < self.swap_images.len) : (i += 1) {
+            try self.initSwapImage(i);
+        }
+    }
+
+    fn initSwapImage(self: *Swapchain, index: usize) !void {
+        const frame_fence = self.swap_images.at("frame_fence", index);
+        frame_fence.* = try self.dev.vkd.createFence(self.dev.handle, .{.flags = .{.signaled_bit = true}}, null);
+        errdefer self.dev.vkd.destroyFence(self.dev.handle, frame_fence.*, null);
+
+        const image_acquired = self.swap_images.at("image_acquired", index);
+        image_acquired.* = try self.dev.vkd.createSemaphore(self.dev.handle, .{.flags = .{}}, null);
+        errdefer self.dev.vkd.destroySemaphore(self.dev.handle, image_acquired.*, null);
+
+        const render_finished = self.swap_images.at("render_finished", index);
+        render_finished.* = try self.dev.vkd.createSemaphore(self.dev.handle, .{.flags = .{}}, null);
+        errdefer self.dev.vkd.destroySemaphore(self.dev.handle, render_finished.*, null);
+    }
+
+    fn deinitSwapImage(self: Swapchain, index: usize) void {
+        const frame_fence = self.swap_images.at("frame_fence", index);
+        self.dev.vkd.destroyFence(self.dev.handle, frame_fence.*, null);
+
+        const image_acquired = self.swap_images.at("image_acquired", index);
+        self.dev.vkd.destroySemaphore(self.dev.handle, image_acquired.*, null);
+
+        const render_finished = self.swap_images.at("render_finished", index);
+        self.dev.vkd.destroySemaphore(self.dev.handle, render_finished.*, null);
+    }
+
+    fn deinitSwapImageArray(self: Swapchain) void {
+        var i: usize = 0;
+        while (i < self.swap_images.len) : (i += 1) {
+            self.deinitSwapImage(i);
+        }
     }
 };
 

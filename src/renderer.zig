@@ -192,7 +192,7 @@ pub const Renderer = struct {
         for (self.descriptor_sets) |set, i| {
             const render_target_write = vk.DescriptorImageInfo{
                 .sampler = .null_handle,
-                .image_view = .null_handke, // self.render_target_views[i],
+                .image_view = .null_handle, // self.render_target_views[i],
                 .image_layout = .general,
             };
 
