@@ -136,9 +136,15 @@ pub const Swapchain = struct {
         var count: u32 = undefined;
         _ = try self.dev.vkd.getSwapchainImagesKHR(self.dev.handle, self.handle, &count, null);
 
-        if (count != self.swap_images.len) {
-            // Play it safe for now and reinitialize everything - this is not likely to happen very often
-            self.deinitSwapImageArray();
+        // TODO: Fix alignment issue with empty soa
+        if (self.swap_images.len != 0) {
+            try self.waitForAllFrames();
+        }
+        // TODO: Dont re-init if the number of swap images is the same
+        // Play it safe for now and reinitialize everything - this is not likely to happen very often
+        self.deinitSwapImageArray();
+
+        if (self.swap_images.len != count) {
             self.swap_images.realloc(count) catch |err| {
                 // The items of the swap image array are already freed, if we were to simply
                 // return the error now, they would be free'd again in the deinit function, so simply free
@@ -146,8 +152,8 @@ pub const Swapchain = struct {
                 self.swap_images.shrink(0);
                 return err;
             };
-            try self.initSwapImageArray();
         }
+        try self.initSwapImageArray();
 
         _ = try self.dev.vkd.getSwapchainImagesKHR(self.dev.handle, self.handle, &count, self.swap_images.slice("image").ptr);
     }

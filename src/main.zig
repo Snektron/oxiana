@@ -93,7 +93,6 @@ pub fn main() !void {
             c.glfwGetWindowSize(window, &w, &h);
             extent.width = @intCast(u32, w);
             extent.height = @intCast(u32, h);
-            // try swapchain.waitForAllFrames();
             try swapchain.recreate(extent, swapchain_options);
 
             // TODO: Optimize
