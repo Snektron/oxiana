@@ -161,7 +161,7 @@ pub const Swapchain = struct {
         return self.swap_images.at("image", self.image_index).*;
     }
 
-    pub fn present(self: *Swapchain) !PresentState {
+    pub fn present(self: *Swapchain, cmdbuf: vk.CommandBuffer) !PresentState {
         // Simple method:
         // 1) Acquire next image
         // 2) Wait for and reset fence of the acquired image

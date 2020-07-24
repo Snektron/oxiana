@@ -2,6 +2,7 @@ const std = @import("std");
 const vk = @import("vulkan");
 const gfx = @import("graphics.zig");
 const Swapchain = @import("swapchain.zig").Swapchain;
+const StructOfArrays = @import("soa.zig").StructOfArrays;
 const resources = @import("resources");
 const Allocator = std.mem.Allocator;
 
@@ -17,6 +18,13 @@ const bindings = [_]vk.DescriptorSetLayoutBinding{
 };
 
 pub const Renderer = struct {
+    const FrameResourceArray = StructOfArrays(struct {
+        descriptor_sets: vk.DescriptorSet,
+        cmd_bufs: vk.CommandBuffer,
+        render_targets: vk.Image,
+        render_target_views: vk.ImageView,
+    });
+
     allocator: *Allocator,
     dev: *const gfx.Device,
 
@@ -25,13 +33,10 @@ pub const Renderer = struct {
     pipeline: vk.Pipeline,
 
     descriptor_pool: vk.DescriptorPool,
-    descriptor_sets: []vk.DescriptorSet,
-
     cmd_pool: vk.CommandPool,
-    cmd_bufs: []vk.CommandBuffer,
 
-    render_targets: []vk.Image,
-    render_target_views: []vk.ImageView,
+    frame_resources: FrameResourceArray,
+    render_target_memory: vk.DeviceMemory,
 
     pub fn init(allocator: *Allocator, dev: *const gfx.Device, swapchain: *const Swapchain) !Renderer {
         var self = Renderer{
@@ -41,37 +46,44 @@ pub const Renderer = struct {
             .pipeline_layout = .null_handle,
             .pipeline = .null_handle,
             .descriptor_pool = .null_handle,
-            .descriptor_sets = &[_]vk.DescriptorSet{},
             .cmd_pool = .null_handle,
-            .cmd_bufs = &[_]vk.CommandBuffer{},
-            .render_targets = &[_]vk.Image{},
-            .render_target_views = &[_]vk.ImageView{},
+            .frame_resources = try FrameResourceArray.alloc(allocator, swapchain.swap_images.len),
+            .render_target_memory = .null_handle,
         };
+
+        // To make deinit on error easier
+        for (self.frame_resources.slice("descriptor_sets")) |*set| set.* = .null_handle;
+        for (self.frame_resources.slice("cmd_bufs")) |*cmd_buf| cmd_buf.* = .null_handle;
+        for (self.frame_resources.slice("render_targets")) |*rt| rt.* = .null_handle;
+        for (self.frame_resources.slice("render_target_views")) |*rtv| rtv.* = .null_handle;
+
         errdefer self.deinit();
 
-        const n_swap_images = @truncate(u32, swapchain.swap_images.len);
-
         try self.createPipeline();
-        try self.createDescriptorSet(n_swap_images);
-        try self.createCommandBuffers(n_swap_images);
-        try self.createRenderTargets(n_swap_images);
-        // Resource creation done at this point
+        try self.createDescriptorSets();
+        try self.createCommandBuffers();
+        try self.createRenderTargets(swapchain);
+        // // Resource creation done at this point
         self.updateDescriptorSets();
 
         return self;
     }
 
     pub fn deinit(self: Renderer) void {
-        self.allocator.free(self.render_targets);
-        self.allocator.free(self.render_target_views);
+        self.dev.vkd.freeMemory(self.dev.handle, self.render_target_memory, null);
 
-        // Command buffers do not need to be free'd explicitly - this happens automatically when the pool they are allocated
-        // from is destroyed.
-        self.allocator.free(self.cmd_bufs);
+        for (self.frame_resources.slice("render_target_views")) |rtv| {
+            self.dev.vkd.destroyImageView(self.dev.handle, rtv, null);
+        }
+
+        for (self.frame_resources.slice("render_targets")) |rt| {
+            self.dev.vkd.destroyImage(self.dev.handle, rt, null);
+        }
+
+        // The descriptor sets and command buffers do not need to be free'd, as they are freed when
+        // their respective pool is destroyed.
+
         self.dev.vkd.destroyCommandPool(self.dev.handle, self.cmd_pool, null);
-        
-        // Similar to command buffers, descriptor sets do not need to be free'd.
-        self.allocator.free(self.descriptor_sets);
         self.dev.vkd.destroyDescriptorPool(self.dev.handle, self.descriptor_pool, null);
 
         self.dev.vkd.destroyPipeline(self.dev.handle, self.pipeline, null);
@@ -125,7 +137,8 @@ pub const Renderer = struct {
         );
     }
 
-    fn createDescriptorSet(self: *Renderer, n_swap_images: u32) !void {
+    fn createDescriptorSets(self: *Renderer) !void {
+        const n_swap_images = @truncate(u32, self.frame_resources.len);
         var pool_sizes: [bindings.len]vk.DescriptorPoolSize = undefined;
         var n_pool_sizes: u32 = 0;
 
@@ -156,43 +169,87 @@ pub const Renderer = struct {
 
         for (layouts) |*layout| layout.* = self.descriptor_set_layout;
 
-        const descriptor_sets = try self.allocator.alloc(vk.DescriptorSet, n_swap_images);
-        errdefer self.allocator.free(descriptor_sets);  
-
         try self.dev.vkd.allocateDescriptorSets(self.dev.handle, .{
             .descriptor_pool = self.descriptor_pool,
             .descriptor_set_count = @truncate(u32, layouts.len),
             .p_set_layouts = layouts.ptr,
-        }, descriptor_sets.ptr);
-        self.descriptor_sets = descriptor_sets;
+        }, self.frame_resources.slice("descriptor_sets").ptr);
     }
 
-    fn createCommandBuffers(self: *Renderer, n_swap_images: u32) !void {
+    fn createCommandBuffers(self: *Renderer) !void {
         self.cmd_pool = try self.dev.vkd.createCommandPool(self.dev.handle, .{
             .flags = .{.reset_command_buffer_bit = true},
             .queue_family_index = self.dev.compute_queue.family,
         }, null);
 
-        const cmd_bufs = try self.allocator.alloc(vk.CommandBuffer, n_swap_images);
-        errdefer self.allocator.free(cmd_bufs);
-
         try self.dev.vkd.allocateCommandBuffers(self.dev.handle, .{
             .command_pool = self.cmd_pool,
             .level = .primary,
-            .command_buffer_count = @truncate(u32, cmd_bufs.len),
-        }, cmd_bufs.ptr);
-        self.cmd_bufs = cmd_bufs;
+            .command_buffer_count = @truncate(u32, self.frame_resources.len),
+        }, self.frame_resources.slice("cmd_bufs").ptr);
     }
 
-    fn createRenderTargets(self: *Renderer, n_swap_images: u32) !void {
+    fn createRenderTargets(self: *Renderer, swapchain: *const Swapchain) !void {
+        const format = .r8g8b8a8_unorm; // Format always supported as storage image, see vk spec table 63.
+        for (self.frame_resources.slice("render_targets")) |*rt| {
+            rt.* = try self.dev.vkd.createImage(self.dev.handle, .{
+                .flags = .{},
+                .image_type = .@"2d",
+                .format = format, 
+                .extent = .{.width = swapchain.extent.width, .height = swapchain.extent.height, .depth = 1},
+                .mip_levels = 1,
+                .array_layers = 1,
+                .samples = .{.@"1_bit" = true},
+                .tiling = .optimal,
+                .usage = .{.storage_bit = true, .transfer_src_bit = true},
+                .sharing_mode = .exclusive,
+                .queue_family_index_count = 0,
+                .p_queue_family_indices = undefined,
+                .initial_layout = .@"undefined",
+            }, null);
+        }
 
+        // https://www.khronos.org/registry/vulkan/specs/1.2-extensions/html/vkspec.html#resources-association
+        // According to the notes under VkMemoryRequirements, the size (and probably the alignment) are equal for
+        // images created with a same specific set of parameters, which is the case here. We simply query for the
+        // requirements of one and multiply the size by the number of images.
+
+        // Assuming there is at least one swap image seems reasonable.
+        var mem_reqs = self.dev.vkd.getImageMemoryRequirements(self.dev.handle, self.frame_resources.at("render_targets", 0).*);
+        const adjusted_size = std.mem.alignForwardGeneric(vk.DeviceSize, mem_reqs.size, mem_reqs.alignment);
+        mem_reqs.size = adjusted_size * self.frame_resources.len;
+
+        self.render_target_memory = try self.dev.allocate(mem_reqs, .{.device_local_bit = true});
+
+        for (self.frame_resources.slice("render_targets")) |rt, i| {
+            try self.dev.vkd.bindImageMemory(self.dev.handle, rt, self.render_target_memory, adjusted_size * i);
+        }
+
+        for (self.frame_resources.slice("render_target_views")) |*rtv, i| {
+            const rt = self.frame_resources.at("render_targets", i).*;
+
+            rtv.* = try self.dev.vkd.createImageView(self.dev.handle, .{
+                .flags = .{},
+                .image = rt,
+                .view_type = .@"2d",
+                .format = format,
+                .components = .{.r = .identity, .g = .identity, .b = .identity, .a = .identity},
+                .subresource_range = .{
+                    .aspect_mask = .{.color_bit = true},
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+            }, null);
+        }
     }
 
-    fn updateDescriptorSets(self: *Renderer) void {
-        for (self.descriptor_sets) |set, i| {
+    fn updateDescriptorSets(self: Renderer) void {
+        for (self.frame_resources.slice("descriptor_sets")) |set, i| {
             const render_target_write = vk.DescriptorImageInfo{
                 .sampler = .null_handle,
-                .image_view = .null_handle, // self.render_target_views[i],
+                .image_view = self.frame_resources.at("render_target_views", i).*,
                 .image_layout = .general,
             };
 

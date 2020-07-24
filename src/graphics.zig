@@ -61,6 +61,12 @@ pub const DeviceDispatch = struct {
     vkDestroyDescriptorPool: vk.PfnDestroyDescriptorPool,
     vkAllocateDescriptorSets: vk.PfnAllocateDescriptorSets,
     vkUpdateDescriptorSets: vk.PfnUpdateDescriptorSets,
+    vkCreateImage: vk.PfnCreateImage,
+    vkDestroyImage: vk.PfnDestroyImage,
+    vkGetImageMemoryRequirements: vk.PfnGetImageMemoryRequirements,
+    vkBindImageMemory: vk.PfnBindImageMemory,
+    vkAllocateMemory: vk.PfnAllocateMemory,
+    vkFreeMemory: vk.PfnFreeMemory,
 
     usingnamespace vk.DeviceWrapper(@This());
 };
@@ -93,7 +99,7 @@ pub const Instance = struct {
     }
 
     pub fn deinit(self: Instance) void {
-        self.vki.vkDestroyInstance(self.handle, null);
+        self.vki.destroyInstance(self.handle, null);
     }
 
     pub fn physicalDeviceInfos(self: Instance, allocator: *Allocator) ![]PhysicalDeviceInfo {
@@ -300,6 +306,16 @@ pub const PhysicalDeviceInfo = struct {
             .compute_family = compute_family,
         };
     }
+
+    pub fn findMemoryTypeIndex(self: PhysicalDeviceInfo, memory_type_bits: u32, flags: vk.MemoryPropertyFlags) !u32 {
+        for (self.mem_props.memory_types[0 .. self.mem_props.memory_type_count]) |mem_type, i| {
+            if (memory_type_bits & (@as(u32, 1) << @truncate(u5, i)) != 0 and mem_type.property_flags.contains(flags)) {
+                return @truncate(u32, i);
+            }
+        }
+
+        return error.NoSuitableMemoryType;
+    }
 };
 
 pub const Queue = struct {
@@ -400,5 +416,12 @@ pub const Device = struct {
 
     pub fn deinit(self: Device) void {
         self.vkd.destroyDevice(self.handle, null);
+    }
+
+    pub fn allocate(self: Device, requirements: vk.MemoryRequirements, flags: vk.MemoryPropertyFlags) !vk.DeviceMemory {
+        return try self.vkd.allocateMemory(self.handle, .{
+            .allocation_size = requirements.size, // TODO: Alignment
+            .memory_type_index = try self.pdev.findMemoryTypeIndex(requirements.memory_type_bits, flags),
+        }, null);
     }
 };
