@@ -70,7 +70,6 @@ pub const DeviceDispatch = struct {
     vkBeginCommandBuffer: vk.PfnBeginCommandBuffer,
     vkEndCommandBuffer: vk.PfnEndCommandBuffer,
     vkResetCommandBuffer: vk.PfnResetCommandBuffer,
-    vkDeviceWaitIdle: vk.PfnDeviceWaitIdle,
 
     usingnamespace vk.DeviceWrapper(@This());
 };

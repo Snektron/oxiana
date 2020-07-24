@@ -59,7 +59,6 @@ pub const Swapchain = struct {
     }
 
     pub fn deinit(self: Swapchain) void {
-        self.waitForAllFrames() catch {};
         self.deinitSwapImageArray();
         self.dev.vkd.destroySemaphore(self.dev.handle, self.next_image_acquired, null);
         self.dev.vkd.destroySwapchainKHR(self.dev.handle, self.handle, null);
@@ -156,32 +155,30 @@ pub const Swapchain = struct {
     pub fn waitForAllFrames(self: Swapchain) !void {
         const fences = self.swap_images.slice("frame_fence");
         _ = try self.dev.vkd.waitForFences(self.dev.handle, @truncate(u32, fences.len), fences.ptr, vk.TRUE, std.math.maxInt(u64));
+        try self.dev.vkd.resetFences(self.dev.handle, @truncate(u32, fences.len), fences.ptr);
     }
 
     pub fn currentImage(self: Swapchain) vk.Image {
         return self.swap_images.at("image", self.image_index).*;
     }
 
-    pub fn currentFrameFence(self: Swapchain) vk.Fence {
-        return self.swap_images.at("frame_fence", self.image_index).*;
-    }
-
     pub fn currentImageAcquiredSem(self: Swapchain) vk.Semaphore {
         return self.swap_images.at("image_acquired", self.image_index).*;
     } 
 
-    pub fn currentFrameFinishedSem(self: Swapchain) vk.Semaphore {
+    pub fn currentRenderFinishedSem(self: Swapchain) vk.Semaphore {
         return self.swap_images.at("render_finished", self.image_index).*;
     }
 
-    pub fn waitForCurrentFrame(self: Swapchain) !void {
-        const frame_fence = self.currentFrameFence();
+    pub fn acquireFrameFence(self: Swapchain) !vk.Fence {
+        const frame_fence = self.swap_images.at("frame_fence", self.image_index).*;
         _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &frame_fence), vk.TRUE, std.math.maxInt(u64));
         try self.dev.vkd.resetFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &frame_fence));
+        return frame_fence;
     }
 
     pub fn swapBuffers(self: *Swapchain) !PresentState {
-        const render_finished = self.currentFrameFinishedSem();
+        const render_finished = self.currentRenderFinishedSem();
 
         _ = try self.dev.vkd.queuePresentKHR(self.dev.present_queue.handle, .{
             .wait_semaphore_count = 1,

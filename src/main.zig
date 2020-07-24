@@ -65,12 +65,11 @@ pub fn main() !void {
     defer renderer.deinit();
 
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
-        try renderer.render(swapchain.image_index);
-
-        try swapchain.waitForCurrentFrame();
-
+        const fence = try swapchain.acquireFrameFence();
         const image_acquired = swapchain.currentImageAcquiredSem();
-        const render_finished = swapchain.currentFrameFinishedSem();
+        const render_finished = swapchain.currentRenderFinishedSem();
+
+        const cmd_buf = try renderer.render(swapchain.image_index);
 
         const wait_stage = [_]vk.PipelineStageFlags{.{.bottom_of_pipe_bit = true}};
         try device.vkd.queueSubmit(device.graphics_queue.handle, 1, &[_]vk.SubmitInfo{.{
@@ -78,10 +77,10 @@ pub fn main() !void {
             .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &image_acquired),
             .p_wait_dst_stage_mask = &wait_stage,
             .command_buffer_count = 1,
-            .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, renderer.frame_resources.at("cmd_bufs", swapchain.image_index)),
+            .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, &cmd_buf),
             .signal_semaphore_count = 1,
             .p_signal_semaphores = @ptrCast([*]const vk.Semaphore, &render_finished),
-        }}, swapchain.currentFrameFence());
+        }}, fence);
 
         const state = swapchain.swapBuffers() catch |err| switch (err) {
             error.OutOfDateKHR => Swapchain.PresentState.suboptimal,
@@ -94,6 +93,7 @@ pub fn main() !void {
             c.glfwGetWindowSize(window, &w, &h);
             extent.width = @intCast(u32, w);
             extent.height = @intCast(u32, h);
+            // try swapchain.waitForAllFrames();
             try swapchain.recreate(extent, swapchain_options);
 
             // TODO: Optimize
@@ -104,7 +104,6 @@ pub fn main() !void {
         c.glfwSwapBuffers(window);
         c.glfwPollEvents();
     }
-
     try swapchain.waitForAllFrames();
 }
 

@@ -271,16 +271,16 @@ pub const Renderer = struct {
         }
     }
 
-    pub fn render(self: *Renderer, image_index: u32) !void {
-        const cmdbuf = self.frame_resources.at("cmd_bufs", image_index).*;
+    pub fn render(self: *Renderer, image_index: u32) !vk.CommandBuffer {
+        const cmd_buf = self.frame_resources.at("cmd_bufs", image_index).*;
 
-        try self.dev.vkd.resetCommandBuffer(cmdbuf, .{});
-
-        try self.dev.vkd.beginCommandBuffer(cmdbuf, .{
+        try self.dev.vkd.resetCommandBuffer(cmd_buf, .{});
+        try self.dev.vkd.beginCommandBuffer(cmd_buf, .{
             .flags = .{.one_time_submit_bit = true},
             .p_inheritance_info = null,
         });
+        try self.dev.vkd.endCommandBuffer(cmd_buf);
 
-        try self.dev.vkd.endCommandBuffer(cmdbuf);
+        return cmd_buf;
     }
 };
