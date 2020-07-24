@@ -63,7 +63,7 @@ pub const Renderer = struct {
         try self.createDescriptorSets();
         try self.createCommandBuffers();
         try self.createRenderTargets(swapchain);
-        // // Resource creation done at this point
+        // Resource creation done at this point
         self.updateDescriptorSets();
 
         return self;
@@ -269,5 +269,18 @@ pub const Renderer = struct {
             // Could do a single updateDescriptorSets, but that would require allocating an array of writes.
             self.dev.vkd.updateDescriptorSets(self.dev.handle, @intCast(u32, writes.len), &writes, 0, undefined);
         }
+    }
+
+    pub fn render(self: *Renderer, image_index: u32) !void {
+        const cmdbuf = self.frame_resources.at("cmd_bufs", image_index).*;
+
+        try self.dev.vkd.resetCommandBuffer(cmdbuf, .{});
+
+        try self.dev.vkd.beginCommandBuffer(cmdbuf, .{
+            .flags = .{.one_time_submit_bit = true},
+            .p_inheritance_info = null,
+        });
+
+        try self.dev.vkd.endCommandBuffer(cmdbuf);
     }
 };

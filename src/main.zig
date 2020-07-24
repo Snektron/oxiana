@@ -53,19 +53,59 @@ pub fn main() !void {
 
     std.log.info(.main, "Using device '{}'", .{device.pdev.name()});
 
-    var swapchain = try Swapchain.init(&instance, &device, allocator, extent, .{
+    const swapchain_options = .{
         .surface = surface,
         .swap_image_usage = .{.transfer_dst_bit = true},
-    });
+    };
+
+    var swapchain = try Swapchain.init(&instance, &device, allocator, extent, swapchain_options);
     defer swapchain.deinit();
 
     var renderer = try Renderer.init(allocator, &device, &swapchain);
     defer renderer.deinit();
 
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
+        try renderer.render(swapchain.image_index);
+
+        try swapchain.waitForCurrentFrame();
+
+        const image_acquired = swapchain.currentImageAcquiredSem();
+        const render_finished = swapchain.currentFrameFinishedSem();
+
+        const wait_stage = [_]vk.PipelineStageFlags{.{.bottom_of_pipe_bit = true}};
+        try device.vkd.queueSubmit(device.graphics_queue.handle, 1, &[_]vk.SubmitInfo{.{
+            .wait_semaphore_count = 1,
+            .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &image_acquired),
+            .p_wait_dst_stage_mask = &wait_stage,
+            .command_buffer_count = 1,
+            .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, renderer.frame_resources.at("cmd_bufs", swapchain.image_index)),
+            .signal_semaphore_count = 1,
+            .p_signal_semaphores = @ptrCast([*]const vk.Semaphore, &render_finished),
+        }}, swapchain.currentFrameFence());
+
+        const state = swapchain.swapBuffers() catch |err| switch (err) {
+            error.OutOfDateKHR => Swapchain.PresentState.suboptimal,
+            else => |narrow| return narrow,
+        };
+
+        if (state == .suboptimal) {
+            var w: c_int = undefined;
+            var h: c_int = undefined;
+            c.glfwGetWindowSize(window, &w, &h);
+            extent.width = @intCast(u32, w);
+            extent.height = @intCast(u32, h);
+            try swapchain.recreate(extent, swapchain_options);
+
+            // TODO: Optimize
+            renderer.deinit();
+            renderer = try Renderer.init(allocator, &device, &swapchain);
+        }
+
         c.glfwSwapBuffers(window);
         c.glfwPollEvents();
     }
+
+    try swapchain.waitForAllFrames();
 }
 
 fn createSurface(instance: gfx.Instance, window: *c.GLFWwindow) !vk.SurfaceKHR {

@@ -56,6 +56,7 @@ pub fn StructOfArrays(comptime T: type) type {
         fn startOffset(self: Self, comptime field: []const u8) usize {
             // byte_offset = field_offset / @sizeOf(T) * len * @sizeOf(T)
             //   = field_offset * len
+            // field_offset has the proper alignment, so field_offset * len should as well
             return @byteOffsetOf(T, field) * self.len;
         }
 

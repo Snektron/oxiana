@@ -67,6 +67,10 @@ pub const DeviceDispatch = struct {
     vkBindImageMemory: vk.PfnBindImageMemory,
     vkAllocateMemory: vk.PfnAllocateMemory,
     vkFreeMemory: vk.PfnFreeMemory,
+    vkBeginCommandBuffer: vk.PfnBeginCommandBuffer,
+    vkEndCommandBuffer: vk.PfnEndCommandBuffer,
+    vkResetCommandBuffer: vk.PfnResetCommandBuffer,
+    vkDeviceWaitIdle: vk.PfnDeviceWaitIdle,
 
     usingnamespace vk.DeviceWrapper(@This());
 };
