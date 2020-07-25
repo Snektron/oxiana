@@ -16,20 +16,22 @@ fn FieldType(comptime T: type, comptime field_name: []const u8) type {
 pub fn StructOfArrays(comptime T: type) type {
     return struct {
         const Self = @This();
-        buf: [*]align(@alignOf(T)) u8,
+        const buf_align = @alignOf(T);
+
+        buf: [*]align(buf_align) u8,
         len: usize, // length in items, not in size of above buffer.
         allocator: *Allocator,
 
         pub fn empty(allocator: *Allocator) Self {
             return Self{
-                .buf = @as([*]align(@alignOf(T)) u8, undefined),
+                .buf = @as([*]align(buf_align) u8, undefined),
                 .len = 0,
                 .allocator = allocator,
             };
         }
 
         pub fn alloc(allocator: *Allocator, len: usize) !Self {
-            const buf = try allocator.allocWithOptions(u8, len * @sizeOf(T), @alignOf(T), null);
+            const buf = try allocator.allocWithOptions(u8, len * @sizeOf(T), buf_align, null);
             return Self{
                 .buf = buf.ptr,
                 .len = len,
@@ -61,6 +63,10 @@ pub fn StructOfArrays(comptime T: type) type {
         }
 
         pub fn slice(self: Self, comptime field: []const u8) []FieldType(T, field) {
+            if (self.len == 0) {
+                return &[_]FieldType(T, field){};
+            }
+
             const F = FieldType(T, field);
             const offset = self.startOffset(field);
             const ptr = @alignCast(@alignOf(F), &self.buf[offset]);

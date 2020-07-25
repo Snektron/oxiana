@@ -132,18 +132,18 @@ pub const Instance = struct {
         for (pdev_infos) |pdev| {
             mem.copy([*:0]const u8, tmp_extensions, extensions);
             if (!(try pdev.supportsSurface(self.vki, surface))) {
-                std.log.info(.graphics, "Cannot use device '{}': Surface not supported\n", .{pdev.name()});
+                std.log.info(.graphics, "Cannot use device '{}': Surface not supported", .{pdev.name()});
                 continue;
             }
 
             var unsupported_extensions = try pdev.filterUnsupportedExtensions(self.vki, allocator, tmp_extensions);
             if (unsupported_extensions.len > 0) {
-                std.log.info(.graphics, "Cannot use device '{}': {} required extension(s) not supported\n", .{
+                std.log.info(.graphics, "Cannot use device '{}': {} required extension(s) not supported", .{
                     pdev.name(),
                     unsupported_extensions.len,
                 });
                 for (unsupported_extensions) |ext| {
-                    std.log.info(.graphics, "- Extension '{}' is not supported\n", .{mem.spanZ(ext)});
+                    std.log.info(.graphics, "- Extension '{}' is not supported", .{mem.spanZ(ext)});
                 }
                 continue;
             }
@@ -156,7 +156,7 @@ pub const Instance = struct {
                     else => |narrow| return narrow,
                 };
 
-                std.log.info(.graphics, "Cannot use device '{}': {}\n", .{pdev.name(), message});
+                std.log.info(.graphics, "Cannot use device '{}': {}", .{pdev.name(), message});
                 continue;
             };
             defer queues.deinit(allocator);

@@ -138,8 +138,10 @@ pub const Swapchain = struct {
         var count: u32 = undefined;
         _ = try self.dev.vkd.getSwapchainImagesKHR(self.dev.handle, self.handle, &count, null);
 
-        // TODO: Fix alignment issue with empty soa
-        if (self.swap_images.len != 0) {
+        // According to the validation layers, the number of fences must be greater than 0.
+        // This can only happen if we're initializing the swap chain for the first time, so
+        // we only need to check it here (and not call waitForAllFrames before).
+        if (self.swap_images.len > 0) {
             try self.waitForAllFrames();
         }
         if (self.swap_images.len != count) {
