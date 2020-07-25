@@ -65,22 +65,19 @@ pub fn main() !void {
     defer renderer.deinit();
 
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
-        const fence = try swapchain.acquireFrameFence();
-        const image_acquired = swapchain.currentImageAcquiredSem();
-        const render_finished = swapchain.currentRenderFinishedSem();
-
+        const swap_image = try swapchain.acquireNextSwapImage();
         const cmd_buf = try renderer.render(swapchain.image_index);
 
         const wait_stage = [_]vk.PipelineStageFlags{.{.bottom_of_pipe_bit = true}};
         try device.vkd.queueSubmit(device.graphics_queue.handle, 1, &[_]vk.SubmitInfo{.{
             .wait_semaphore_count = 1,
-            .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &image_acquired),
+            .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &swap_image.image_acquired),
             .p_wait_dst_stage_mask = &wait_stage,
             .command_buffer_count = 1,
             .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, &cmd_buf),
             .signal_semaphore_count = 1,
-            .p_signal_semaphores = @ptrCast([*]const vk.Semaphore, &render_finished),
-        }}, fence);
+            .p_signal_semaphores = @ptrCast([*]const vk.Semaphore, &swap_image.render_finished),
+        }}, swap_image.frame_fence);
 
         const state = swapchain.swapBuffers() catch |err| switch (err) {
             error.OutOfDateKHR => Swapchain.PresentState.suboptimal,

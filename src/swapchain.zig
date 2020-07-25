@@ -18,12 +18,14 @@ pub const Swapchain = struct {
         format_features: vk.FormatFeatureFlags = .{},
     };
 
-    const SwapImageArray = StructOfArrays(struct {
+    const SwapImage = struct {
         image: vk.Image,
         image_acquired: vk.Semaphore,
         render_finished: vk.Semaphore,
         frame_fence: vk.Fence,
-    });
+    };
+
+    const SwapImageArray = StructOfArrays(SwapImage);
 
     instance: *const Instance,
     dev: *const Device,
@@ -140,11 +142,9 @@ pub const Swapchain = struct {
         if (self.swap_images.len != 0) {
             try self.waitForAllFrames();
         }
-        // TODO: Dont re-init if the number of swap images is the same
-        // Play it safe for now and reinitialize everything - this is not likely to happen very often
-        self.deinitSwapImageArray();
-
         if (self.swap_images.len != count) {
+            // Play it safe for now and reinitialize everything - this is not likely to happen very often
+            self.deinitSwapImageArray();
             self.swap_images.realloc(count) catch |err| {
                 // The items of the swap image array are already freed, if we were to simply
                 // return the error now, they would be free'd again in the deinit function, so simply free
@@ -152,8 +152,8 @@ pub const Swapchain = struct {
                 self.swap_images.shrink(0);
                 return err;
             };
+            try self.initSwapImageArray();
         }
-        try self.initSwapImageArray();
 
         _ = try self.dev.vkd.getSwapchainImagesKHR(self.dev.handle, self.handle, &count, self.swap_images.slice("image").ptr);
     }
@@ -161,30 +161,23 @@ pub const Swapchain = struct {
     pub fn waitForAllFrames(self: Swapchain) !void {
         const fences = self.swap_images.slice("frame_fence");
         _ = try self.dev.vkd.waitForFences(self.dev.handle, @truncate(u32, fences.len), fences.ptr, vk.TRUE, std.math.maxInt(u64));
-        try self.dev.vkd.resetFences(self.dev.handle, @truncate(u32, fences.len), fences.ptr);
     }
 
-    pub fn currentImage(self: Swapchain) vk.Image {
-        return self.swap_images.at("image", self.image_index).*;
-    }
-
-    pub fn currentImageAcquiredSem(self: Swapchain) vk.Semaphore {
-        return self.swap_images.at("image_acquired", self.image_index).*;
-    } 
-
-    pub fn currentRenderFinishedSem(self: Swapchain) vk.Semaphore {
-        return self.swap_images.at("render_finished", self.image_index).*;
-    }
-
-    pub fn acquireFrameFence(self: Swapchain) !vk.Fence {
+    pub fn acquireNextSwapImage(self: Swapchain) !SwapImage {
         const frame_fence = self.swap_images.at("frame_fence", self.image_index).*;
         _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &frame_fence), vk.TRUE, std.math.maxInt(u64));
         try self.dev.vkd.resetFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &frame_fence));
-        return frame_fence;
+
+        return SwapImage{
+            .image = self.swap_images.at("image", self.image_index).*,
+            .image_acquired = self.swap_images.at("image_acquired", self.image_index).*,
+            .render_finished = self.swap_images.at("render_finished", self.image_index).*,
+            .frame_fence = frame_fence,
+        };
     }
 
     pub fn swapBuffers(self: *Swapchain) !PresentState {
-        const render_finished = self.currentRenderFinishedSem();
+        const render_finished = self.swap_images.at("render_finished", self.image_index).*;
 
         _ = try self.dev.vkd.queuePresentKHR(self.dev.present_queue.handle, .{
             .wait_semaphore_count = 1,
