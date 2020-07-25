@@ -66,7 +66,7 @@ pub fn main() !void {
 
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
         const swap_image = try swapchain.acquireNextSwapImage();
-        const cmd_buf = try renderer.render(swapchain.image_index, swap_image.image);
+        const cmd_buf = try renderer.render(swapchain.extent, swapchain.image_index, swap_image.image);
 
         const wait_stage = [_]vk.PipelineStageFlags{.{.bottom_of_pipe_bit = true}};
         try device.vkd.queueSubmit(device.graphics_queue.handle, 1, &[_]vk.SubmitInfo{.{

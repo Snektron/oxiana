@@ -118,6 +118,10 @@ pub const Swapchain = struct {
 
         try self.fetchSwapImages();
 
+        // It's actually better to call acquire before destroying the old handle, however, we
+        // need to ensure that the old resources are still alive then. Instead, we just call destroy
+        // before recreating the resources, and accept the performance loss - resizing isn't likely
+        // to happen very often anyway.
         const result = try self.dev.vkd.acquireNextImageKHR(
             self.dev.handle,
             self.handle,
