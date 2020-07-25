@@ -271,7 +271,7 @@ pub const Renderer = struct {
         }
     }
 
-    pub fn render(self: *Renderer, image_index: u32) !vk.CommandBuffer {
+    pub fn render(self: *Renderer, image_index: u32, swapchain_image: vk.Image) !vk.CommandBuffer {
         const cmd_buf = self.frame_resources.at("cmd_bufs", image_index).*;
 
         try self.dev.vkd.resetCommandBuffer(cmd_buf, .{});
@@ -279,8 +279,77 @@ pub const Renderer = struct {
             .flags = .{.one_time_submit_bit = true},
             .p_inheritance_info = null,
         });
+
+        const subresource_range = vk.ImageSubresourceRange{
+            .aspect_mask = .{.color_bit = true},
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        };
+
+        imageTransition(
+            self.dev,
+            cmd_buf,
+            swapchain_image,
+            subresource_range,
+            .{.layout = .@"undefined", .stage = .{.top_of_pipe_bit = true}},
+            .{.layout = .general, .stage = .{.top_of_pipe_bit = true}},
+        );
+
+        self.dev.vkd.cmdClearColorImage(
+            cmd_buf,
+            swapchain_image,
+            .general,
+            .{.float_32 = .{1, 0, 1, 1}},
+            1,
+            @ptrCast([*]const vk.ImageSubresourceRange, &subresource_range),
+        );
+
+        imageTransition(
+            self.dev,
+            cmd_buf,
+            swapchain_image,
+            subresource_range,
+            .{.layout = .general, .stage = .{.top_of_pipe_bit = true}},
+            .{.layout = .present_src_khr, .stage = .{.bottom_of_pipe_bit = true}},
+        );
+
         try self.dev.vkd.endCommandBuffer(cmd_buf);
 
         return cmd_buf;
     }
 };
+
+const ImageState = struct {
+    layout: vk.ImageLayout,
+    stage: vk.PipelineStageFlags,
+    access_mask: vk.AccessFlags = .{},
+};
+
+fn imageTransition(
+    dev: *const gfx.Device,
+    cmd_buf: vk.CommandBuffer,
+    image: vk.Image,
+    subresource_range: vk.ImageSubresourceRange,
+    src: ImageState,
+    dst: ImageState
+) void {
+    const barrier = vk.ImageMemoryBarrier{
+        .src_access_mask = src.access_mask,
+        .dst_access_mask = dst.access_mask,
+        .old_layout = src.layout,
+        .new_layout = dst.layout,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresource_range = subresource_range,
+    };
+
+    dev.vkd.cmdPipelineBarrier(
+        cmd_buf, src.stage, dst.stage, .{},
+        0, undefined,
+        0, undefined,
+        1, @ptrCast([*]const vk.ImageMemoryBarrier, &barrier)
+    );
+}

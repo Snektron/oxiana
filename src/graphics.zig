@@ -70,6 +70,8 @@ pub const DeviceDispatch = struct {
     vkBeginCommandBuffer: vk.PfnBeginCommandBuffer,
     vkEndCommandBuffer: vk.PfnEndCommandBuffer,
     vkResetCommandBuffer: vk.PfnResetCommandBuffer,
+    vkCmdPipelineBarrier: vk.PfnCmdPipelineBarrier,
+    vkCmdClearColorImage: vk.PfnCmdClearColorImage,
 
     usingnamespace vk.DeviceWrapper(@This());
 };
