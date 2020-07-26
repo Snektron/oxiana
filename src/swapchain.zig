@@ -15,6 +15,7 @@ pub const Swapchain = struct {
     pub const CreateInfo = struct {
         surface: vk.SurfaceKHR,
         swap_image_usage: vk.ImageUsageFlags,
+        vsync: bool = false,
         format_features: vk.FormatFeatureFlags = .{},
     };
 
@@ -71,6 +72,15 @@ pub const Swapchain = struct {
         const pdev = self.dev.pdev.handle;
         self.surface_format = try findSurfaceFormat(self.instance.vki, pdev, create_info, self.allocator);
         self.present_mode = try findPresentMode(self.instance.vki, pdev, create_info.surface, self.allocator);
+
+        // There seems to be a bug in the validation layers that causes a message to be printed about
+        // fifo being unsupported if getPhysicalDeviceSurfacePresentModesKHR is not called. To work around
+        // this for now, just override the value after calling that function. (It needs to be called with a
+        // a valid pointer as well it seems).
+        if (create_info.vsync) {
+            self.present_mode = .fifo_khr;
+        }
+
         const caps = try self.instance.vki.getPhysicalDeviceSurfaceCapabilitiesKHR(pdev, create_info.surface);
         self.extent = findActualExtent(caps, new_extent);
 
@@ -110,17 +120,16 @@ pub const Swapchain = struct {
             .old_swapchain = self.handle,
         }, null);
         errdefer self.dev.vkd.destroySwapchainKHR(self.dev.handle, self.handle, null);
-
-        if (old_handle != .null_handle) {
+        
+        // Destroy the handle *after* acquiring the first frame, the give the presentation engine the opportunity
+        // to finish presenting to the old frames. It's technically valid to nuke the swapchain at any point,
+        // but this chould be a little more efficient.
+        defer if (old_handle != .null_handle) {
             self.dev.vkd.destroySwapchainKHR(self.dev.handle, old_handle, null);
-        }
+        };
 
         try self.fetchSwapImages();
 
-        // It's actually better to call acquire before destroying the old handle, however, we
-        // need to ensure that the old resources are still alive then. Instead, we just call destroy
-        // before recreating the resources, and accept the performance loss - resizing isn't likely
-        // to happen very often anyway.
         const result = try self.dev.vkd.acquireNextImageKHR(
             self.dev.handle,
             self.handle,
@@ -141,12 +150,6 @@ pub const Swapchain = struct {
         var count: u32 = undefined;
         _ = try self.dev.vkd.getSwapchainImagesKHR(self.dev.handle, self.handle, &count, null);
 
-        // According to the validation layers, the number of fences must be greater than 0.
-        // This can only happen if we're initializing the swap chain for the first time, so
-        // we only need to check it here (and not call waitForAllFrames before).
-        // if (self.swap_images.len > 0) {
-        //     try self.waitForAllFrames();
-        // }
         if (self.swap_images.len != count) {
             // Play it safe for now and reinitialize everything - this is not likely to happen very often
             self.deinitSwapImageArray();
@@ -163,21 +166,11 @@ pub const Swapchain = struct {
         _ = try self.dev.vkd.getSwapchainImagesKHR(self.dev.handle, self.handle, &count, self.swap_images.slice("image").ptr);
     }
 
-    // pub fn waitForAllFrames(self: Swapchain) !void {
-    //     const fences = self.swap_images.slice("frame_fence");
-    //     _ = try self.dev.vkd.waitForFences(self.dev.handle, @truncate(u32, fences.len), fences.ptr, vk.TRUE, std.math.maxInt(u64));
-    // }
-
     pub fn acquireNextSwapImage(self: Swapchain) !SwapImage {
-        // const frame_fence = self.swap_images.at("frame_fence", self.image_index).*;
-        // _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &frame_fence), vk.TRUE, std.math.maxInt(u64));
-        // try self.dev.vkd.resetFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &frame_fence));
-
         return SwapImage{
             .image = self.swap_images.at("image", self.image_index).*,
             .image_acquired = self.swap_images.at("image_acquired", self.image_index).*,
             .render_finished = self.swap_images.at("render_finished", self.image_index).*,
-            // .frame_fence = frame_fence,
         };
     }
 
@@ -241,10 +234,6 @@ pub const Swapchain = struct {
     }
 
     fn initSwapImage(self: *Swapchain, index: usize) !void {
-        // const frame_fence = self.swap_images.at("frame_fence", index);
-        // frame_fence.* = try self.dev.vkd.createFence(self.dev.handle, .{.flags = .{.signaled_bit = true}}, null);
-        // errdefer self.dev.vkd.destroyFence(self.dev.handle, frame_fence.*, null);
-
         const image_acquired = self.swap_images.at("image_acquired", index);
         image_acquired.* = try self.dev.vkd.createSemaphore(self.dev.handle, .{.flags = .{}}, null);
         errdefer self.dev.vkd.destroySemaphore(self.dev.handle, image_acquired.*, null);
@@ -255,9 +244,6 @@ pub const Swapchain = struct {
     }
 
     fn deinitSwapImage(self: Swapchain, index: usize) void {
-        // const frame_fence = self.swap_images.at("frame_fence", index);
-        // self.dev.vkd.destroyFence(self.dev.handle, frame_fence.*, null);
-
         const image_acquired = self.swap_images.at("image_acquired", index);
         self.dev.vkd.destroySemaphore(self.dev.handle, image_acquired.*, null);
 

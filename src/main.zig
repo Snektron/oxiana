@@ -56,6 +56,7 @@ pub fn main() !void {
     const swapchain_options = .{
         .surface = surface,
         .swap_image_usage = .{.transfer_dst_bit = true},
+        .vsync = true,
     };
 
     var swapchain = try Swapchain.init(&instance, &device, allocator, extent, swapchain_options);
@@ -113,7 +114,6 @@ pub fn main() !void {
     }
 
     try renderer.waitForAllFrames();
-    // try swapchain.waitForAllFrames();
 }
 
 fn createSurface(instance: gfx.Instance, window: *c.GLFWwindow) !vk.SurfaceKHR {
