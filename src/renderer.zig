@@ -325,7 +325,6 @@ pub const Renderer = struct {
         // Make sure the previous frame is finished rendering.
         _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, asManyPtr(&fence), vk.TRUE, std.math.maxInt(u64));
 
-        try self.dev.vkd.resetCommandBuffer(cmd_buf, .{});
         try self.dev.vkd.beginCommandBuffer(cmd_buf, .{
             .flags = .{.one_time_submit_bit = true},
             .p_inheritance_info = null,

@@ -180,55 +180,6 @@ pub fn VoxelTree(comptime N: Index.AxisType, comptime H: u32) type {
     };
 }
 
-pub fn Cursor(comptime is_const: bool, comptime Tree: type) type {
-    return struct {
-        const Self = @This();
-        const TreePtr = if (is_const) *const Tree else *Tree; 
-        tree: TreePtr,
-        offset: NodeOffset,
-        height: u32,
-
-        // The target index _within the current node_. This value is mutated every time
-        // the cursor traverses down the tree to stay within the new node.
-        target_index: Index,
-
-        // The size of children of the current node - when this reaches 0, the cursor
-        // is in the smallest possible leaf.
-        child_side_dim: u32,
-
-        pub fn init(tree: TreePtr, target_index: Index) !Cursor {
-            if (!target_index.inBounds(Tree.side_dim_minus_one)) {
-                return error.OutOfBounds;
-            }
-
-            if (tree.nodes.items.len == 0) {
-                return error.NoRootNode;
-            }
-
-            return .{
-                .offset = ROOT_NODE_OFFSET,
-                .height = Tree.height - 1,
-                .target_index = target_index,
-                // division rounds down due to -1, so add one after. This can't be done before the division,
-                // as that could result in a potential overflow.
-                .child_side_dim = @divTrunc(Tree.side_dim_minus_one, Tree.children_per_edge) + 1,
-            };
-        }
-
-        pub fn traverseDown(self: *Self) bool {
-
-        }
-
-        pub fn makeChild(self: *Self) !void {
-
-        }
-
-        pub fn distanceFromRoot(self: Self) u32 {
-            return Tree.height - 1 - self.height;
-        }
-    };
-}
-
 test "VoxelTree - refAllDecls" {
     std.meta.refAllDecls(@This());
 }
