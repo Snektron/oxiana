@@ -97,8 +97,15 @@ pub const Swapchain = struct {
             image_count = std.math.min(image_count, caps.max_image_count);
         }
 
-        const concurrent = self.dev.graphics_queue.family != self.dev.present_queue.family; // TODO: compute
-        const qfi = [_]u32{self.dev.graphics_queue.family, self.dev.present_queue.family};
+        var qfi: [3]u32 = undefined;
+        var n_concurrent_queues: u32 = 0;
+
+        for ([_]u32{self.dev.graphics_queue.family, self.dev.compute_queue.family, self.dev.present_queue.family}) |fam| {
+            if (std.mem.indexOfScalar(u32, qfi[0 .. n_concurrent_queues], fam) == null) {
+                qfi[n_concurrent_queues] = fam;
+                n_concurrent_queues += 1;
+            }
+        }
 
         const old_handle = self.handle;
         self.handle = try self.dev.vkd.createSwapchainKHR(self.dev.handle, .{
@@ -110,8 +117,8 @@ pub const Swapchain = struct {
             .image_extent = self.extent,
             .image_array_layers = 1,
             .image_usage = create_info.swap_image_usage,
-            .image_sharing_mode = if (concurrent) .concurrent else .exclusive,
-            .queue_family_index_count = qfi.len,
+            .image_sharing_mode = if (n_concurrent_queues > 1) .concurrent else .exclusive,
+            .queue_family_index_count = n_concurrent_queues,
             .p_queue_family_indices = &qfi,
             .pre_transform = caps.current_transform,
             .composite_alpha = .{.opaque_bit_khr = true},

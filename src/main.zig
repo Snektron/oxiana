@@ -56,7 +56,7 @@ pub fn main() !void {
     const swapchain_options = .{
         .surface = surface,
         .swap_image_usage = .{.transfer_dst_bit = true},
-        .vsync = true,
+        .vsync = false,
     };
 
     var swapchain = try Swapchain.init(&instance, &device, allocator, extent, swapchain_options);
