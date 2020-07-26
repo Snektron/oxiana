@@ -86,15 +86,7 @@ pub const Renderer = struct {
     }
 
     pub fn deinit(self: Renderer) void {
-        self.dev.vkd.freeMemory(self.dev.handle, self.render_target_memory, null);
-
-        for (self.frame_resources.slice("render_target_views")) |rtv| {
-            self.dev.vkd.destroyImageView(self.dev.handle, rtv, null);
-        }
-
-        for (self.frame_resources.slice("render_targets")) |rt| {
-            self.dev.vkd.destroyImage(self.dev.handle, rt, null);
-        }
+        self.deinitRenderTargets();
 
         // The descriptor sets and command buffers do not need to be free'd, as they are freed when
         // their respective pool is destroyed.
@@ -108,6 +100,18 @@ pub const Renderer = struct {
 
         for (self.frame_resources.slice("frame_fences")) |fence| {
             self.dev.vkd.destroyFence(self.dev.handle, fence, null);
+        }
+    }
+
+    pub fn deinitRenderTargets(self: Renderer) void {
+        self.dev.vkd.freeMemory(self.dev.handle, self.render_target_memory, null);
+
+        for (self.frame_resources.slice("render_target_views")) |rtv| {
+            self.dev.vkd.destroyImageView(self.dev.handle, rtv, null);
+        }
+
+        for (self.frame_resources.slice("render_targets")) |rt| {
+            self.dev.vkd.destroyImage(self.dev.handle, rt, null);
         }
     }
 
@@ -295,6 +299,17 @@ pub const Renderer = struct {
             // Could do a single updateDescriptorSets, but that would require allocating an array of writes.
             self.dev.vkd.updateDescriptorSets(self.dev.handle, @intCast(u32, writes.len), &writes, 0, undefined);
         }
+    }
+
+    pub fn resize(self: *Renderer, extent: vk.Extent2D) !void {
+        self.deinitRenderTargets();
+
+        // Clear to null_handle to make deinit on error easier
+        for (self.frame_resources.slice("render_targets")) |*rt| rt.* = .null_handle;
+        for (self.frame_resources.slice("render_target_views")) |*rtv| rtv.* = .null_handle;
+
+        try self.createRenderTargets(extent);
+        self.updateDescriptorSets();
     }
 
     pub fn render(self: *Renderer, extent: vk.Extent2D, swapchain_image: vk.Image) !FrameData {

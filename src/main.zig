@@ -98,8 +98,7 @@ pub fn main() !void {
             try swapchain.recreate(extent, swapchain_options);
 
             // TODO: Optimize
-            renderer.deinit();
-            renderer = try Renderer.init(allocator, &device, swapchain.extent);
+            try renderer.resize(swapchain.extent);
         }
 
         c.glfwSwapBuffers(window);
