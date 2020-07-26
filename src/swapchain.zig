@@ -22,7 +22,6 @@ pub const Swapchain = struct {
         image: vk.Image,
         image_acquired: vk.Semaphore,
         render_finished: vk.Semaphore,
-        frame_fence: vk.Fence,
     };
 
     const SwapImageArray = StructOfArrays(SwapImage);
@@ -145,9 +144,9 @@ pub const Swapchain = struct {
         // According to the validation layers, the number of fences must be greater than 0.
         // This can only happen if we're initializing the swap chain for the first time, so
         // we only need to check it here (and not call waitForAllFrames before).
-        if (self.swap_images.len > 0) {
-            try self.waitForAllFrames();
-        }
+        // if (self.swap_images.len > 0) {
+        //     try self.waitForAllFrames();
+        // }
         if (self.swap_images.len != count) {
             // Play it safe for now and reinitialize everything - this is not likely to happen very often
             self.deinitSwapImageArray();
@@ -164,21 +163,21 @@ pub const Swapchain = struct {
         _ = try self.dev.vkd.getSwapchainImagesKHR(self.dev.handle, self.handle, &count, self.swap_images.slice("image").ptr);
     }
 
-    pub fn waitForAllFrames(self: Swapchain) !void {
-        const fences = self.swap_images.slice("frame_fence");
-        _ = try self.dev.vkd.waitForFences(self.dev.handle, @truncate(u32, fences.len), fences.ptr, vk.TRUE, std.math.maxInt(u64));
-    }
+    // pub fn waitForAllFrames(self: Swapchain) !void {
+    //     const fences = self.swap_images.slice("frame_fence");
+    //     _ = try self.dev.vkd.waitForFences(self.dev.handle, @truncate(u32, fences.len), fences.ptr, vk.TRUE, std.math.maxInt(u64));
+    // }
 
     pub fn acquireNextSwapImage(self: Swapchain) !SwapImage {
-        const frame_fence = self.swap_images.at("frame_fence", self.image_index).*;
-        _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &frame_fence), vk.TRUE, std.math.maxInt(u64));
-        try self.dev.vkd.resetFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &frame_fence));
+        // const frame_fence = self.swap_images.at("frame_fence", self.image_index).*;
+        // _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &frame_fence), vk.TRUE, std.math.maxInt(u64));
+        // try self.dev.vkd.resetFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &frame_fence));
 
         return SwapImage{
             .image = self.swap_images.at("image", self.image_index).*,
             .image_acquired = self.swap_images.at("image_acquired", self.image_index).*,
             .render_finished = self.swap_images.at("render_finished", self.image_index).*,
-            .frame_fence = frame_fence,
+            // .frame_fence = frame_fence,
         };
     }
 
@@ -242,9 +241,9 @@ pub const Swapchain = struct {
     }
 
     fn initSwapImage(self: *Swapchain, index: usize) !void {
-        const frame_fence = self.swap_images.at("frame_fence", index);
-        frame_fence.* = try self.dev.vkd.createFence(self.dev.handle, .{.flags = .{.signaled_bit = true}}, null);
-        errdefer self.dev.vkd.destroyFence(self.dev.handle, frame_fence.*, null);
+        // const frame_fence = self.swap_images.at("frame_fence", index);
+        // frame_fence.* = try self.dev.vkd.createFence(self.dev.handle, .{.flags = .{.signaled_bit = true}}, null);
+        // errdefer self.dev.vkd.destroyFence(self.dev.handle, frame_fence.*, null);
 
         const image_acquired = self.swap_images.at("image_acquired", index);
         image_acquired.* = try self.dev.vkd.createSemaphore(self.dev.handle, .{.flags = .{}}, null);
@@ -256,8 +255,8 @@ pub const Swapchain = struct {
     }
 
     fn deinitSwapImage(self: Swapchain, index: usize) void {
-        const frame_fence = self.swap_images.at("frame_fence", index);
-        self.dev.vkd.destroyFence(self.dev.handle, frame_fence.*, null);
+        // const frame_fence = self.swap_images.at("frame_fence", index);
+        // self.dev.vkd.destroyFence(self.dev.handle, frame_fence.*, null);
 
         const image_acquired = self.swap_images.at("image_acquired", index);
         self.dev.vkd.destroySemaphore(self.dev.handle, image_acquired.*, null);

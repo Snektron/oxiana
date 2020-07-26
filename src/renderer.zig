@@ -6,6 +6,8 @@ const StructOfArrays = @import("soa.zig").StructOfArrays;
 const resources = @import("resources");
 const Allocator = std.mem.Allocator;
 
+const MAX_FRAMES_IN_FLIGHT = 2;
+
 // Thus must kept in sync with the bindings in shaders/traverse.comp
 const bindings = [_]vk.DescriptorSetLayoutBinding{
     .{ // layout(binding = 0, rgba8) restrict writeonly uniform image2D render_target;
@@ -19,11 +21,17 @@ const bindings = [_]vk.DescriptorSetLayoutBinding{
 
 pub const Renderer = struct {
     const FrameResourceArray = StructOfArrays(struct {
+        frame_fences: vk.Fence,
         descriptor_sets: vk.DescriptorSet,
         cmd_bufs: vk.CommandBuffer,
         render_targets: vk.Image,
         render_target_views: vk.ImageView,
     });
+
+    const FrameData = struct {
+        frame_fence: vk.Fence,
+        cmd_buf: vk.CommandBuffer,
+    };
 
     allocator: *Allocator,
     dev: *const gfx.Device,
@@ -35,10 +43,12 @@ pub const Renderer = struct {
     descriptor_pool: vk.DescriptorPool,
     cmd_pool: vk.CommandPool,
 
+    frame_index: usize,
     frame_resources: FrameResourceArray,
+
     render_target_memory: vk.DeviceMemory,
 
-    pub fn init(allocator: *Allocator, dev: *const gfx.Device, swapchain: *const Swapchain) !Renderer {
+    pub fn init(allocator: *Allocator, dev: *const gfx.Device, extent: vk.Extent2D) !Renderer {
         var self = Renderer{
             .allocator = allocator,
             .dev = dev,
@@ -47,11 +57,13 @@ pub const Renderer = struct {
             .pipeline = .null_handle,
             .descriptor_pool = .null_handle,
             .cmd_pool = .null_handle,
-            .frame_resources = try FrameResourceArray.alloc(allocator, swapchain.swap_images.len),
+            .frame_index = 0,
+            .frame_resources = try FrameResourceArray.alloc(allocator, MAX_FRAMES_IN_FLIGHT),
             .render_target_memory = .null_handle,
         };
 
         // To make deinit on error easier
+        for (self.frame_resources.slice("frame_fences")) |*fence| fence.* = .null_handle;
         for (self.frame_resources.slice("descriptor_sets")) |*set| set.* = .null_handle;
         for (self.frame_resources.slice("cmd_bufs")) |*cmd_buf| cmd_buf.* = .null_handle;
         for (self.frame_resources.slice("render_targets")) |*rt| rt.* = .null_handle;
@@ -59,10 +71,11 @@ pub const Renderer = struct {
 
         errdefer self.deinit();
 
+        try self.createFences();
         try self.createPipeline();
         try self.createDescriptorSets();
         try self.createCommandBuffers();
-        try self.createRenderTargets(swapchain);
+        try self.createRenderTargets(extent);
         // Resource creation done at this point
         self.updateDescriptorSets();
 
@@ -89,6 +102,16 @@ pub const Renderer = struct {
         self.dev.vkd.destroyPipeline(self.dev.handle, self.pipeline, null);
         self.dev.vkd.destroyPipelineLayout(self.dev.handle, self.pipeline_layout, null);
         self.dev.vkd.destroyDescriptorSetLayout(self.dev.handle, self.descriptor_set_layout, null);
+
+        for (self.frame_resources.slice("frame_fences")) |fence| {
+            self.dev.vkd.destroyFence(self.dev.handle, fence, null);
+        }
+    }
+
+    fn createFences(self: *Renderer) !void {
+        for (self.frame_resources.slice("frame_fences")) |*fence, i| {
+            fence.* = try self.dev.vkd.createFence(self.dev.handle, .{.flags = .{.signaled_bit = true}}, null);
+        }
     }
 
     fn createPipeline(self: *Renderer) !void {
@@ -189,14 +212,14 @@ pub const Renderer = struct {
         }, self.frame_resources.slice("cmd_bufs").ptr);
     }
 
-    fn createRenderTargets(self: *Renderer, swapchain: *const Swapchain) !void {
+    fn createRenderTargets(self: *Renderer, extent: vk.Extent2D) !void {
         const format = .r8g8b8a8_unorm; // Format always supported as storage image, see vk spec table 63.
         for (self.frame_resources.slice("render_targets")) |*rt| {
             rt.* = try self.dev.vkd.createImage(self.dev.handle, .{
                 .flags = .{},
                 .image_type = .@"2d",
                 .format = format, 
-                .extent = .{.width = swapchain.extent.width, .height = swapchain.extent.height, .depth = 1},
+                .extent = .{.width = extent.width, .height = extent.height, .depth = 1},
                 .mip_levels = 1,
                 .array_layers = 1,
                 .samples = .{.@"1_bit" = true},
@@ -271,9 +294,16 @@ pub const Renderer = struct {
         }
     }
 
-    pub fn render(self: *Renderer, extent: vk.Extent2D, image_index: u32, swapchain_image: vk.Image) !vk.CommandBuffer {
-        const cmd_buf = self.frame_resources.at("cmd_bufs", image_index).*;
-        const render_target = self.frame_resources.at("render_targets", image_index).*;
+    pub fn render(self: *Renderer, extent: vk.Extent2D, swapchain_image: vk.Image) !FrameData {
+        const index = self.frame_index;
+        self.frame_index = (self.frame_index + 1) % self.frame_resources.len;
+
+        const fence = self.frame_resources.at("frame_fences", index).*;
+        const cmd_buf = self.frame_resources.at("cmd_bufs", index).*;
+        const render_target = self.frame_resources.at("render_targets", index).*;
+
+        // Make sure the previous frame is finished rendering.
+        _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &fence), vk.TRUE, std.math.maxInt(u64));
 
         try self.dev.vkd.resetCommandBuffer(cmd_buf, .{});
         try self.dev.vkd.beginCommandBuffer(cmd_buf, .{
@@ -384,6 +414,19 @@ pub const Renderer = struct {
 
         try self.dev.vkd.endCommandBuffer(cmd_buf);
 
-        return cmd_buf;
+        try self.dev.vkd.resetFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &fence));
+        // If the fence is not submitted, it is not going to get signalled, so anything
+        // that fails could potentially ruin the synchronization if that causes
+        // the fence to not be submitted.
+
+        return FrameData{
+            .frame_fence = fence,
+            .cmd_buf = cmd_buf,
+        };
+    }
+
+    pub fn waitForAllFrames(self: Renderer) !void {
+        const fences = self.frame_resources.slice("frame_fences");
+        _ = try self.dev.vkd.waitForFences(self.dev.handle, @intCast(u32, fences.len), fences.ptr, vk.TRUE, std.math.maxInt(u64));
     }
 };
