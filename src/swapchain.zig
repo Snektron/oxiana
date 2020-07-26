@@ -2,6 +2,7 @@ const std = @import("std");
 const vk = @import("vulkan");
 const gfx = @import("graphics.zig");
 const StructOfArrays = @import("soa.zig").StructOfArrays;
+const asManyPtr = @import("util.zig").asManyPtr;
 const Instance = gfx.Instance;
 const Device = gfx.Device;
 const Allocator = std.mem.Allocator;
@@ -186,10 +187,10 @@ pub const Swapchain = struct {
 
         _ = try self.dev.vkd.queuePresentKHR(self.dev.present_queue.handle, .{
             .wait_semaphore_count = 1,
-            .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &render_finished),
+            .p_wait_semaphores = asManyPtr(&render_finished),
             .swapchain_count = 1,
-            .p_swapchains = @ptrCast([*]const vk.SwapchainKHR, &self.handle),
-            .p_image_indices = @ptrCast([*]const u32, &self.image_index),
+            .p_swapchains = asManyPtr(&self.handle),
+            .p_image_indices = asManyPtr(&self.image_index),
             .p_results = null,
         });
 

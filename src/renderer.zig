@@ -5,6 +5,7 @@ const Swapchain = @import("swapchain.zig").Swapchain;
 const StructOfArrays = @import("soa.zig").StructOfArrays;
 const resources = @import("resources");
 const Allocator = std.mem.Allocator;
+const asManyPtr = @import("util.zig").asManyPtr;
 
 const max_frames_in_flight = 2;
 
@@ -131,7 +132,7 @@ pub const Renderer = struct {
         self.pipeline_layout = try self.dev.vkd.createPipelineLayout(self.dev.handle, .{
             .flags = .{},
             .set_layout_count = 1,
-            .p_set_layouts = @ptrCast([*]const vk.DescriptorSetLayout, &self.descriptor_set_layout),
+            .p_set_layouts = asManyPtr(&self.descriptor_set_layout),
             .push_constant_range_count = 0,
             .p_push_constant_ranges = undefined,
         }, null);
@@ -161,9 +162,9 @@ pub const Renderer = struct {
             self.dev.handle,
             .null_handle,
             1,
-            @ptrCast([*]const vk.ComputePipelineCreateInfo, &cpci),
+            asManyPtr(&cpci),
             null,
-            @ptrCast([*]vk.Pipeline, &self.pipeline),
+            asManyPtr(&self.pipeline),
         );
     }
 
@@ -290,7 +291,7 @@ pub const Renderer = struct {
                     .dst_array_element = 0,
                     .descriptor_count = 1,
                     .descriptor_type = bindings[0].descriptor_type,
-                    .p_image_info = @ptrCast([*]const vk.DescriptorImageInfo, &render_target_write),
+                    .p_image_info = asManyPtr(&render_target_write),
                     .p_buffer_info = undefined,
                     .p_texel_buffer_view = undefined,
                 },
@@ -322,7 +323,7 @@ pub const Renderer = struct {
         const descriptor_set = self.frame_resources.at("descriptor_sets", index).*;
 
         // Make sure the previous frame is finished rendering.
-        _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &fence), vk.TRUE, std.math.maxInt(u64));
+        _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, asManyPtr(&fence), vk.TRUE, std.math.maxInt(u64));
 
         try self.dev.vkd.resetCommandBuffer(cmd_buf, .{});
         try self.dev.vkd.beginCommandBuffer(cmd_buf, .{
@@ -379,7 +380,7 @@ pub const Renderer = struct {
             self.pipeline_layout,
             0,
             1,
-            @ptrCast([*]const vk.DescriptorSet, &descriptor_set),
+            asManyPtr(&descriptor_set),
             0,
             undefined,
         );
@@ -398,7 +399,7 @@ pub const Renderer = struct {
             swapchain_image,
             .transfer_dst_optimal,
             1,
-            @ptrCast([*]const vk.ImageCopy, &vk.ImageCopy{
+            asManyPtr(&vk.ImageCopy{
                 .src_subresource = .{
                     .aspect_mask = .{.color_bit = true},
                     .mip_level = 0,
@@ -443,7 +444,7 @@ pub const Renderer = struct {
 
         try self.dev.vkd.endCommandBuffer(cmd_buf);
 
-        try self.dev.vkd.resetFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &fence));
+        try self.dev.vkd.resetFences(self.dev.handle, 1, asManyPtr(&fence));
         // If the fence is not submitted, it is not going to get signalled, so anything
         // that fails could potentially ruin the synchronization if that causes
         // the fence to not be submitted.

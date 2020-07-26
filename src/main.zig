@@ -4,6 +4,7 @@ const c = @import("c.zig");
 const gfx = @import("graphics.zig");
 const Swapchain = @import("swapchain.zig").Swapchain;
 const Renderer = @import("renderer.zig").Renderer;
+const asManyPtr = @import("util.zig").asManyPtr;
 
 const app_name = "Oxiana";
 const required_device_extensions = &[_][*:0]const u8{
@@ -75,12 +76,12 @@ pub fn main() !void {
         const wait_stage = [_]vk.PipelineStageFlags{.{.bottom_of_pipe_bit = true}};
         try device.vkd.queueSubmit(device.compute_queue.handle, 1, &[_]vk.SubmitInfo{.{
             .wait_semaphore_count = 1,
-            .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &swap_image.image_acquired),
+            .p_wait_semaphores = asManyPtr(&swap_image.image_acquired),
             .p_wait_dst_stage_mask = &wait_stage,
             .command_buffer_count = 1,
-            .p_command_buffers = @ptrCast([*]const vk.CommandBuffer, &frame_data.cmd_buf),
+            .p_command_buffers = asManyPtr(&frame_data.cmd_buf),
             .signal_semaphore_count = 1,
-            .p_signal_semaphores = @ptrCast([*]const vk.Semaphore, &swap_image.render_finished),
+            .p_signal_semaphores = asManyPtr(&swap_image.render_finished),
         }}, frame_data.frame_fence);
 
         const state = swapchain.swapBuffers() catch |err| switch (err) {
