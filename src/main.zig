@@ -73,7 +73,7 @@ pub fn main() !void {
         const frame_data = try renderer.render(swapchain.extent, swap_image.image);
 
         const wait_stage = [_]vk.PipelineStageFlags{.{.bottom_of_pipe_bit = true}};
-        try device.vkd.queueSubmit(device.graphics_queue.handle, 1, &[_]vk.SubmitInfo{.{
+        try device.vkd.queueSubmit(device.compute_queue.handle, 1, &[_]vk.SubmitInfo{.{
             .wait_semaphore_count = 1,
             .p_wait_semaphores = @ptrCast([*]const vk.Semaphore, &swap_image.image_acquired),
             .p_wait_dst_stage_mask = &wait_stage,

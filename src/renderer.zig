@@ -6,7 +6,10 @@ const StructOfArrays = @import("soa.zig").StructOfArrays;
 const resources = @import("resources");
 const Allocator = std.mem.Allocator;
 
-const MAX_FRAMES_IN_FLIGHT = 2;
+const max_frames_in_flight = 2;
+
+// Keep in sync with shaders/traverse.comp
+const workgroup_size = vk.Extent2D{.width = 8, .height = 8};
 
 // Thus must kept in sync with the bindings in shaders/traverse.comp
 const bindings = [_]vk.DescriptorSetLayoutBinding{
@@ -58,7 +61,7 @@ pub const Renderer = struct {
             .descriptor_pool = .null_handle,
             .cmd_pool = .null_handle,
             .frame_index = 0,
-            .frame_resources = try FrameResourceArray.alloc(allocator, MAX_FRAMES_IN_FLIGHT),
+            .frame_resources = try FrameResourceArray.alloc(allocator, max_frames_in_flight),
             .render_target_memory = .null_handle,
         };
 
@@ -301,6 +304,7 @@ pub const Renderer = struct {
         const fence = self.frame_resources.at("frame_fences", index).*;
         const cmd_buf = self.frame_resources.at("cmd_bufs", index).*;
         const render_target = self.frame_resources.at("render_targets", index).*;
+        const descriptor_set = self.frame_resources.at("descriptor_sets", index).*;
 
         // Make sure the previous frame is finished rendering.
         _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, @ptrCast([*]const vk.Fence, &fence), vk.TRUE, std.math.maxInt(u64));
@@ -353,13 +357,23 @@ pub const Renderer = struct {
             );
         }
 
-        self.dev.vkd.cmdClearColorImage(
+        self.dev.vkd.cmdBindPipeline(cmd_buf, .compute, self.pipeline);
+        self.dev.vkd.cmdBindDescriptorSets(
             cmd_buf,
-            render_target,
-            .general,
-            .{.float_32 = .{1, 0, 1, 1}},
+            .compute,
+            self.pipeline_layout,
+            0,
             1,
-            @ptrCast([*]const vk.ImageSubresourceRange, &subresource_range),
+            @ptrCast([*]const vk.DescriptorSet, &descriptor_set),
+            0,
+            undefined,
+        );
+
+        self.dev.vkd.cmdDispatch(
+            cmd_buf,
+            (extent.width + workgroup_size.width - 1) / workgroup_size.width,
+            (extent.height + workgroup_size.height - 1) / workgroup_size.height,
+            1,
         );
 
         self.dev.vkd.cmdCopyImage(

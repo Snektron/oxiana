@@ -73,6 +73,9 @@ pub const DeviceDispatch = struct {
     vkCmdPipelineBarrier: vk.PfnCmdPipelineBarrier,
     vkCmdClearColorImage: vk.PfnCmdClearColorImage,
     vkCmdCopyImage: vk.PfnCmdCopyImage,
+    vkCmdBindPipeline: vk.PfnCmdBindPipeline,
+    vkCmdBindDescriptorSets: vk.PfnCmdBindDescriptorSets,
+    vkCmdDispatch: vk.PfnCmdDispatch,
 
     usingnamespace vk.DeviceWrapper(@This());
 };
