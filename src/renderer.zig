@@ -105,8 +105,6 @@ pub const Renderer = struct {
     }
 
     pub fn deinitRenderTargets(self: Renderer) void {
-        self.dev.vkd.freeMemory(self.dev.handle, self.render_target_memory, null);
-
         for (self.frame_resources.slice("render_target_views")) |rtv| {
             self.dev.vkd.destroyImageView(self.dev.handle, rtv, null);
         }
@@ -114,6 +112,8 @@ pub const Renderer = struct {
         for (self.frame_resources.slice("render_targets")) |rt| {
             self.dev.vkd.destroyImage(self.dev.handle, rt, null);
         }
+
+        self.dev.vkd.freeMemory(self.dev.handle, self.render_target_memory, null);
     }
 
     fn createFences(self: *Renderer) !void {
@@ -346,26 +346,16 @@ pub const Renderer = struct {
                     .dst_access_mask = .{},
                     .old_layout = .@"undefined",
                     .new_layout = .general,
-                    .src_queue_family_index = self.dev.graphics_queue.family,
-                    .dst_queue_family_index = self.dev.graphics_queue.family,
+                    .src_queue_family_index = self.dev.compute_queue.family,
+                    .dst_queue_family_index = self.dev.compute_queue.family,
                     .image = render_target,
                     .subresource_range = subresource_range,  
                 },
-                .{
-                    .src_access_mask = .{},
-                    .dst_access_mask = .{},
-                    .old_layout = .@"undefined",
-                    .new_layout = .transfer_dst_optimal,
-                    .src_queue_family_index = self.dev.present_queue.family,
-                    .dst_queue_family_index = self.dev.graphics_queue.family,
-                    .image = swapchain_image,
-                    .subresource_range = subresource_range,
-                }
             };
             self.dev.vkd.cmdPipelineBarrier(
                 cmd_buf,
                 .{.top_of_pipe_bit = true},
-                .{.transfer_bit = true},
+                .{.compute_shader_bit = true},
                 .{},
                 0, undefined,
                 0, undefined,
@@ -392,10 +382,44 @@ pub const Renderer = struct {
             1,
         );
 
+        {
+            const barriers = [_]vk.ImageMemoryBarrier{
+                .{
+                    .src_access_mask = .{},
+                    .dst_access_mask = .{},
+                    .old_layout = .general,
+                    .new_layout = .transfer_src_optimal,
+                    .src_queue_family_index = self.dev.compute_queue.family,
+                    .dst_queue_family_index = self.dev.compute_queue.family,
+                    .image = render_target,
+                    .subresource_range = subresource_range,  
+                },
+                .{
+                    .src_access_mask = .{},
+                    .dst_access_mask = .{},
+                    .old_layout = .@"undefined",
+                    .new_layout = .transfer_dst_optimal,
+                    .src_queue_family_index = self.dev.present_queue.family,
+                    .dst_queue_family_index = self.dev.compute_queue.family,
+                    .image = swapchain_image,
+                    .subresource_range = subresource_range,
+                }
+            };
+            self.dev.vkd.cmdPipelineBarrier(
+                cmd_buf,
+                .{.compute_shader_bit = true},
+                .{.transfer_bit = true},
+                .{},
+                0, undefined,
+                0, undefined,
+                barriers.len, &barriers
+            );
+        }
+
         self.dev.vkd.cmdCopyImage(
             cmd_buf,
             render_target,
-            .general,
+            .transfer_src_optimal,
             swapchain_image,
             .transfer_dst_optimal,
             1,
@@ -423,9 +447,9 @@ pub const Renderer = struct {
                 .{
                     .src_access_mask = .{},
                     .dst_access_mask = .{},
-                    .old_layout = .@"undefined",
+                    .old_layout = .transfer_dst_optimal,
                     .new_layout = .present_src_khr,
-                    .src_queue_family_index = self.dev.graphics_queue.family,
+                    .src_queue_family_index = self.dev.compute_queue.family,
                     .dst_queue_family_index = self.dev.present_queue.family,
                     .image = swapchain_image,
                     .subresource_range = subresource_range,  
@@ -433,8 +457,8 @@ pub const Renderer = struct {
             };
             self.dev.vkd.cmdPipelineBarrier(
                 cmd_buf,
-                .{.top_of_pipe_bit = true},
                 .{.transfer_bit = true},
+                .{.bottom_of_pipe_bit = true},
                 .{},
                 0, undefined,
                 0, undefined,
