@@ -27,6 +27,7 @@ pub const Renderer = struct {
     const FrameResourceArray = StructOfArrays(struct {
         frame_fences: vk.Fence,
         descriptor_sets: vk.DescriptorSet,
+        cmd_pools: vk.CommandPool,
         cmd_bufs: vk.CommandBuffer,
         render_targets: vk.Image,
         render_target_views: vk.ImageView,
@@ -45,7 +46,6 @@ pub const Renderer = struct {
     pipeline: vk.Pipeline,
 
     descriptor_pool: vk.DescriptorPool,
-    cmd_pool: vk.CommandPool,
 
     frame_index: usize,
     frame_resources: FrameResourceArray,
@@ -60,7 +60,6 @@ pub const Renderer = struct {
             .pipeline_layout = .null_handle,
             .pipeline = .null_handle,
             .descriptor_pool = .null_handle,
-            .cmd_pool = .null_handle,
             .frame_index = 0,
             .frame_resources = try FrameResourceArray.alloc(allocator, max_frames_in_flight),
             .render_target_memory = .null_handle,
@@ -69,6 +68,7 @@ pub const Renderer = struct {
         // To make deinit on error easier
         for (self.frame_resources.slice("frame_fences")) |*fence| fence.* = .null_handle;
         for (self.frame_resources.slice("descriptor_sets")) |*set| set.* = .null_handle;
+        for (self.frame_resources.slice("cmd_pools")) |*cmd_pool| cmd_pool.* = .null_handle;
         for (self.frame_resources.slice("cmd_bufs")) |*cmd_buf| cmd_buf.* = .null_handle;
         for (self.frame_resources.slice("render_targets")) |*rt| rt.* = .null_handle;
         for (self.frame_resources.slice("render_target_views")) |*rtv| rtv.* = .null_handle;
@@ -91,8 +91,9 @@ pub const Renderer = struct {
 
         // The descriptor sets and command buffers do not need to be free'd, as they are freed when
         // their respective pool is destroyed.
-
-        self.dev.vkd.destroyCommandPool(self.dev.handle, self.cmd_pool, null);
+        for (self.frame_resources.slice("cmd_pools")) |cmd_pool| {
+            self.dev.vkd.destroyCommandPool(self.dev.handle, cmd_pool, null);
+        }
         self.dev.vkd.destroyDescriptorPool(self.dev.handle, self.descriptor_pool, null);
 
         self.dev.vkd.destroyPipeline(self.dev.handle, self.pipeline, null);
@@ -208,16 +209,18 @@ pub const Renderer = struct {
     }
 
     fn createCommandBuffers(self: *Renderer) !void {
-        self.cmd_pool = try self.dev.vkd.createCommandPool(self.dev.handle, .{
-            .flags = .{.reset_command_buffer_bit = true},
-            .queue_family_index = self.dev.compute_queue.family,
-        }, null);
+        for (self.frame_resources.slice("cmd_pools")) |*cmd_pool, i| {
+            cmd_pool.* = try self.dev.vkd.createCommandPool(self.dev.handle, .{
+                .flags = .{},
+                .queue_family_index = self.dev.compute_queue.family,
+            }, null);
 
-        try self.dev.vkd.allocateCommandBuffers(self.dev.handle, .{
-            .command_pool = self.cmd_pool,
-            .level = .primary,
-            .command_buffer_count = @truncate(u32, self.frame_resources.len),
-        }, self.frame_resources.slice("cmd_bufs").ptr);
+            try self.dev.vkd.allocateCommandBuffers(self.dev.handle, .{
+                .command_pool = cmd_pool.*,
+                .level = .primary,
+                .command_buffer_count = 1,
+            }, asManyPtr(self.frame_resources.at("cmd_bufs", i)));
+        }
     }
 
     fn createRenderTargets(self: *Renderer, extent: vk.Extent2D) !void {
@@ -318,12 +321,18 @@ pub const Renderer = struct {
         self.frame_index = (self.frame_index + 1) % self.frame_resources.len;
 
         const fence = self.frame_resources.at("frame_fences", index).*;
+        const cmd_pool = self.frame_resources.at("cmd_pools", index).*;
         const cmd_buf = self.frame_resources.at("cmd_bufs", index).*;
         const render_target = self.frame_resources.at("render_targets", index).*;
         const descriptor_set = self.frame_resources.at("descriptor_sets", index).*;
 
         // Make sure the previous frame is finished rendering.
         _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, asManyPtr(&fence), vk.TRUE, std.math.maxInt(u64));
+
+        // Instead of having a single pool, we have a pool for each frame. This way if we allocate more than one
+        // command buffer per frame, we can reset them all in one go. Furthermore, the command pool can use a
+        // linear allocation scheme [citation needed]
+        try self.dev.vkd.resetCommandPool(self.dev.handle, cmd_pool, .{});
 
         try self.dev.vkd.beginCommandBuffer(cmd_buf, .{
             .flags = .{.one_time_submit_bit = true},

@@ -50,6 +50,9 @@ pub const Oxiana = struct {
             null
         ) orelse return error.WindowInitFailed;
         errdefer c.glfwDestroyWindow(self.window);
+        c.glfwSetWindowUserPointer(self.window, @ptrCast(*c_void, self));
+        _ = c.glfwSetKeyCallback(self.window, keyCallback);
+        _ = c.glfwSetCursorPosCallback(self.window, cursorCallback);
 
         const glfw_exts = blk: {
             var count: u32 = 0;
@@ -93,6 +96,14 @@ pub const Oxiana = struct {
         self.allocator.destroy(self);
     }
 
+    pub fn keyCallback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.C) void {
+        const self = @ptrCast(*Oxiana, @alignCast(@alignOf(Oxiana), c.glfwGetWindowUserPointer(window).?));
+    }
+
+    pub fn cursorCallback(window: ?*c.GLFWwindow, x: f64, y: f64) callconv(.C) void {
+        const self = @ptrCast(*Oxiana, @alignCast(@alignOf(Oxiana), c.glfwGetWindowUserPointer(window).?));
+    }
+
     pub fn loop(self: *Oxiana) !void {
         var frame: usize = 0;
         var timer = try std.time.Timer.start();
@@ -134,7 +145,6 @@ pub const Oxiana = struct {
                 try self.renderer.resize(self.swapchain.extent);
             }
 
-            c.glfwSwapBuffers(self.window);
             c.glfwPollEvents();
 
             frame += 1;
