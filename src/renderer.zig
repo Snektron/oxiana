@@ -3,7 +3,6 @@ const vk = @import("vulkan");
 const gfx = @import("graphics.zig");
 const math = @import("math.zig");
 const Swapchain = @import("swapchain.zig").Swapchain;
-const StructOfArrays = @import("soa.zig").StructOfArrays;
 const resources = @import("resources");
 const Allocator = std.mem.Allocator;
 const asManyPtr = @import("util.zig").asManyPtr;
@@ -33,21 +32,11 @@ const PushConstantBuffer = extern struct {
 };
 
 pub const Renderer = struct {
-    const FrameResourceArray = StructOfArrays(struct {
-        frame_fences: vk.Fence,
-        descriptor_sets: vk.DescriptorSet,
-        cmd_pools: vk.CommandPool,
-        cmd_bufs: vk.CommandBuffer,
-        render_targets: vk.Image,
-        render_target_views: vk.ImageView,
-    });
-
     const FrameData = struct {
         frame_fence: vk.Fence,
         cmd_buf: vk.CommandBuffer,
     };
 
-    allocator: *Allocator,
     dev: *const gfx.Device,
 
     descriptor_set_layout: vk.DescriptorSetLayout,
@@ -57,30 +46,36 @@ pub const Renderer = struct {
     descriptor_pool: vk.DescriptorPool,
 
     frame_index: usize,
-    frame_resources: FrameResourceArray,
+    frame_resources: struct {
+        frame_fences: [max_frames_in_flight]vk.Fence,
+        descriptor_sets: [max_frames_in_flight]vk.DescriptorSet,
+        cmd_pools: [max_frames_in_flight]vk.CommandPool,
+        cmd_bufs: [max_frames_in_flight]vk.CommandBuffer,
+        render_targets: [max_frames_in_flight]vk.Image,
+        render_target_views: [max_frames_in_flight]vk.ImageView,
+    },
 
     render_target_memory: vk.DeviceMemory,
 
-    pub fn init(allocator: *Allocator, dev: *const gfx.Device, extent: vk.Extent2D) !Renderer {
+    pub fn init(dev: *const gfx.Device, extent: vk.Extent2D) !Renderer {
         var self = Renderer{
-            .allocator = allocator,
             .dev = dev,
             .descriptor_set_layout = .null_handle,
             .pipeline_layout = .null_handle,
             .pipeline = .null_handle,
             .descriptor_pool = .null_handle,
             .frame_index = 0,
-            .frame_resources = try FrameResourceArray.alloc(allocator, max_frames_in_flight),
+            .frame_resources = undefined,
             .render_target_memory = .null_handle,
         };
 
         // To make deinit on error easier
-        for (self.frame_resources.slice("frame_fences")) |*fence| fence.* = .null_handle;
-        for (self.frame_resources.slice("descriptor_sets")) |*set| set.* = .null_handle;
-        for (self.frame_resources.slice("cmd_pools")) |*cmd_pool| cmd_pool.* = .null_handle;
-        for (self.frame_resources.slice("cmd_bufs")) |*cmd_buf| cmd_buf.* = .null_handle;
-        for (self.frame_resources.slice("render_targets")) |*rt| rt.* = .null_handle;
-        for (self.frame_resources.slice("render_target_views")) |*rtv| rtv.* = .null_handle;
+        for (self.frame_resources.frame_fences) |*fence| fence.* = .null_handle;
+        for (self.frame_resources.descriptor_sets) |*set| set.* = .null_handle;
+        for (self.frame_resources.cmd_pools) |*cmd_pool| cmd_pool.* = .null_handle;
+        for (self.frame_resources.cmd_bufs) |*cmd_buf| cmd_buf.* = .null_handle;
+        for (self.frame_resources.render_targets) |*rt| rt.* = .null_handle;
+        for (self.frame_resources.render_target_views) |*rtv| rtv.* = .null_handle;
 
         errdefer self.deinit();
 
@@ -100,7 +95,7 @@ pub const Renderer = struct {
 
         // The descriptor sets and command buffers do not need to be free'd, as they are freed when
         // their respective pool is destroyed.
-        for (self.frame_resources.slice("cmd_pools")) |cmd_pool| {
+        for (self.frame_resources.cmd_pools) |cmd_pool| {
             self.dev.vkd.destroyCommandPool(self.dev.handle, cmd_pool, null);
         }
         self.dev.vkd.destroyDescriptorPool(self.dev.handle, self.descriptor_pool, null);
@@ -109,17 +104,17 @@ pub const Renderer = struct {
         self.dev.vkd.destroyPipelineLayout(self.dev.handle, self.pipeline_layout, null);
         self.dev.vkd.destroyDescriptorSetLayout(self.dev.handle, self.descriptor_set_layout, null);
 
-        for (self.frame_resources.slice("frame_fences")) |fence| {
+        for (self.frame_resources.frame_fences) |fence| {
             self.dev.vkd.destroyFence(self.dev.handle, fence, null);
         }
     }
 
     pub fn deinitRenderTargets(self: Renderer) void {
-        for (self.frame_resources.slice("render_target_views")) |rtv| {
+        for (self.frame_resources.render_target_views) |rtv| {
             self.dev.vkd.destroyImageView(self.dev.handle, rtv, null);
         }
 
-        for (self.frame_resources.slice("render_targets")) |rt| {
+        for (self.frame_resources.render_targets) |rt| {
             self.dev.vkd.destroyImage(self.dev.handle, rt, null);
         }
 
@@ -127,7 +122,7 @@ pub const Renderer = struct {
     }
 
     fn createFences(self: *Renderer) !void {
-        for (self.frame_resources.slice("frame_fences")) |*fence, i| {
+        for (self.frame_resources.frame_fences) |*fence, i| {
             fence.* = try self.dev.vkd.createFence(self.dev.handle, .{.flags = .{.signaled_bit = true}}, null);
         }
     }
@@ -185,20 +180,19 @@ pub const Renderer = struct {
     }
 
     fn createDescriptorSets(self: *Renderer) !void {
-        const n_swap_images = @truncate(u32, self.frame_resources.len);
         var pool_sizes: [bindings.len]vk.DescriptorPoolSize = undefined;
         var n_pool_sizes: u32 = 0;
 
         for (bindings) |binding| {
             for (pool_sizes[0 .. n_pool_sizes]) |*pool_size| {
                 if (pool_size.@"type" == binding.descriptor_type) {
-                    pool_size.descriptor_count += binding.descriptor_count * n_swap_images;
+                    pool_size.descriptor_count += binding.descriptor_count * max_frames_in_flight;
                     break;
                 }
             } else {
                 pool_sizes[n_pool_sizes] = .{
                     .@"type" = binding.descriptor_type,
-                    .descriptor_count = binding.descriptor_count * n_swap_images,
+                    .descriptor_count = binding.descriptor_count * max_frames_in_flight,
                 };
                 n_pool_sizes += 1;
             }
@@ -206,25 +200,23 @@ pub const Renderer = struct {
 
         self.descriptor_pool = try self.dev.vkd.createDescriptorPool(self.dev.handle, .{
             .flags = .{},
-            .max_sets = n_swap_images,
+            .max_sets = max_frames_in_flight,
             .pool_size_count = n_pool_sizes,
             .p_pool_sizes = &pool_sizes,
         }, null);
 
-        const layouts = try self.allocator.alloc(vk.DescriptorSetLayout, n_swap_images);
-        defer self.allocator.free(layouts);
-
+        var layouts: [max_frames_in_flight]vk.DescriptorSetLayout = undefined;
         for (layouts) |*layout| layout.* = self.descriptor_set_layout;
 
         try self.dev.vkd.allocateDescriptorSets(self.dev.handle, .{
             .descriptor_pool = self.descriptor_pool,
             .descriptor_set_count = @truncate(u32, layouts.len),
-            .p_set_layouts = layouts.ptr,
-        }, self.frame_resources.slice("descriptor_sets").ptr);
+            .p_set_layouts = &layouts,
+        }, &self.frame_resources.descriptor_sets);
     }
 
     fn createCommandBuffers(self: *Renderer) !void {
-        for (self.frame_resources.slice("cmd_pools")) |*cmd_pool, i| {
+        for (self.frame_resources.cmd_pools) |*cmd_pool, i| {
             cmd_pool.* = try self.dev.vkd.createCommandPool(self.dev.handle, .{
                 .flags = .{},
                 .queue_family_index = self.dev.compute_queue.family,
@@ -234,13 +226,13 @@ pub const Renderer = struct {
                 .command_pool = cmd_pool.*,
                 .level = .primary,
                 .command_buffer_count = 1,
-            }, asManyPtr(self.frame_resources.at("cmd_bufs", i)));
+            }, asManyPtr(&self.frame_resources.cmd_bufs[i]));
         }
     }
 
     fn createRenderTargets(self: *Renderer, extent: vk.Extent2D) !void {
         const format = .r8g8b8a8_unorm; // Format always supported as storage image, see vk spec table 63.
-        for (self.frame_resources.slice("render_targets")) |*rt| {
+        for (self.frame_resources.render_targets) |*rt| {
             rt.* = try self.dev.vkd.createImage(self.dev.handle, .{
                 .flags = .{},
                 .image_type = .@"2d",
@@ -264,18 +256,18 @@ pub const Renderer = struct {
         // requirements of one and multiply the size by the number of images.
 
         // Assuming there is at least one swap image seems reasonable.
-        var mem_reqs = self.dev.vkd.getImageMemoryRequirements(self.dev.handle, self.frame_resources.at("render_targets", 0).*);
+        var mem_reqs = self.dev.vkd.getImageMemoryRequirements(self.dev.handle, self.frame_resources.render_targets[0]);
         const adjusted_size = std.mem.alignForwardGeneric(vk.DeviceSize, mem_reqs.size, mem_reqs.alignment);
-        mem_reqs.size = adjusted_size * self.frame_resources.len;
+        mem_reqs.size = adjusted_size * max_frames_in_flight;
 
         self.render_target_memory = try self.dev.allocate(mem_reqs, .{.device_local_bit = true});
 
-        for (self.frame_resources.slice("render_targets")) |rt, i| {
+        for (self.frame_resources.render_targets) |rt, i| {
             try self.dev.vkd.bindImageMemory(self.dev.handle, rt, self.render_target_memory, adjusted_size * i);
         }
 
-        for (self.frame_resources.slice("render_target_views")) |*rtv, i| {
-            const rt = self.frame_resources.at("render_targets", i).*;
+        for (self.frame_resources.render_target_views) |*rtv, i| {
+            const rt = self.frame_resources.render_targets[i];
 
             rtv.* = try self.dev.vkd.createImageView(self.dev.handle, .{
                 .flags = .{},
@@ -295,10 +287,10 @@ pub const Renderer = struct {
     }
 
     fn updateDescriptorSets(self: Renderer) void {
-        for (self.frame_resources.slice("descriptor_sets")) |set, i| {
+        for (self.frame_resources.descriptor_sets) |set, i| {
             const render_target_write = vk.DescriptorImageInfo{
                 .sampler = .null_handle,
-                .image_view = self.frame_resources.at("render_target_views", i).*,
+                .image_view = self.frame_resources.render_target_views[i],
                 .image_layout = .general,
             };
 
@@ -324,8 +316,8 @@ pub const Renderer = struct {
         self.deinitRenderTargets();
 
         // Clear to null_handle to make deinit on error easier
-        for (self.frame_resources.slice("render_targets")) |*rt| rt.* = .null_handle;
-        for (self.frame_resources.slice("render_target_views")) |*rtv| rtv.* = .null_handle;
+        for (self.frame_resources.render_targets) |*rt| rt.* = .null_handle;
+        for (self.frame_resources.render_target_views) |*rtv| rtv.* = .null_handle;
 
         try self.createRenderTargets(extent);
         self.updateDescriptorSets();
@@ -333,13 +325,13 @@ pub const Renderer = struct {
 
     pub fn render(self: *Renderer, extent: vk.Extent2D, swapchain_image: vk.Image, cam: math.Camera) !FrameData {
         const index = self.frame_index;
-        self.frame_index = (self.frame_index + 1) % self.frame_resources.len;
+        self.frame_index = (self.frame_index + 1) % max_frames_in_flight;
 
-        const fence = self.frame_resources.at("frame_fences", index).*;
-        const cmd_pool = self.frame_resources.at("cmd_pools", index).*;
-        const cmd_buf = self.frame_resources.at("cmd_bufs", index).*;
-        const render_target = self.frame_resources.at("render_targets", index).*;
-        const descriptor_set = self.frame_resources.at("descriptor_sets", index).*;
+        const fence = self.frame_resources.frame_fences[index];
+        const cmd_pool = self.frame_resources.cmd_pools[index];
+        const cmd_buf = self.frame_resources.cmd_bufs[index];
+        const render_target = self.frame_resources.render_targets[index];
+        const descriptor_set = self.frame_resources.descriptor_sets[index];
 
         // Make sure the previous frame is finished rendering.
         _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, asManyPtr(&fence), vk.TRUE, std.math.maxInt(u64));
@@ -518,7 +510,12 @@ pub const Renderer = struct {
     }
 
     pub fn waitForAllFrames(self: Renderer) !void {
-        const fences = self.frame_resources.slice("frame_fences");
-        _ = try self.dev.vkd.waitForFences(self.dev.handle, @intCast(u32, fences.len), fences.ptr, vk.TRUE, std.math.maxInt(u64));
+        _ = try self.dev.vkd.waitForFences(
+            self.dev.handle,
+            max_frames_in_flight,
+            &self.frame_resources.frame_fences,
+            vk.TRUE,
+            std.math.maxInt(u64)
+        );
     }
 };

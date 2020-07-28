@@ -82,7 +82,7 @@ pub const Oxiana = struct {
         });
         errdefer self.swapchain.deinit();
 
-        self.renderer = try Renderer.init(allocator, &self.device, self.swapchain.extent);
+        self.renderer = try Renderer.init(&self.device, self.swapchain.extent);
         errdefer self.renderer.deinit();
 
         self.camera = .{
