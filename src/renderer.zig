@@ -9,7 +9,6 @@ const asManyPtr = @import("util.zig").asManyPtr;
 
 const max_frames_in_flight = 2;
 
-// Keep in sync with shaders/traverse.comp
 const workgroup_size = vk.Extent2D{.width = 8, .height = 8};
 
 // Keep in sync with shaders/traverse.comp
@@ -21,6 +20,13 @@ const bindings = [_]vk.DescriptorSetLayoutBinding{
         .stage_flags = .{.compute_bit = true},
         .p_immutable_samplers = null,
     },
+    .{ // layout(binding = 1) readonly buffer OctreeTree
+        .binding = 1,
+        .descriptor_type = .storage_buffer,
+        .descriptor_count = 1,
+        .stage_flags = .{.compute_bit = true},
+        .p_immutable_samplers = null,
+    }
 };
 
 // Keep in sync with shaders/traverse.comp
@@ -155,6 +161,27 @@ pub const Renderer = struct {
         }, null);
         defer self.dev.vkd.destroyShaderModule(self.dev.handle, traversal_shader, null);
 
+        const entries = [_]vk.SpecializationMapEntry{
+            .{.constant_id = 0, .offset = 0, .size = @sizeOf(u32)},
+            .{.constant_id = 1, .offset = 4, .size = @sizeOf(u32)},
+            .{.constant_id = 2, .offset = 8, .size = @sizeOf(u32)}, // octree_height
+            .{.constant_id = 3, .offset = 12, .size = @sizeOf(u32)}, // children_per_edge
+        };
+
+        const specialization_data = [_]u32{
+            workgroup_size.width,
+            workgroup_size.height,
+            8, // octree_height
+            2, // children_per_edge
+        };
+
+        const specialization_info = vk.SpecializationInfo{
+            .map_entry_count = entries.len,
+            .p_map_entries = &entries,
+            .data_size = specialization_data.len * @sizeOf(u32),
+            .p_data = @ptrCast([*]const u8, &specialization_data),
+        };
+
         const cpci = vk.ComputePipelineCreateInfo{
             .flags = .{},
             .stage = .{
@@ -162,7 +189,7 @@ pub const Renderer = struct {
                 .stage = .{.compute_bit = true},
                 .module = traversal_shader,
                 .p_name = "main",
-                .p_specialization_info = null,
+                .p_specialization_info = &specialization_info,
             },
             .layout = self.pipeline_layout,
             .base_pipeline_handle = .null_handle,

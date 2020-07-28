@@ -18,7 +18,7 @@ pub const Index = struct {
 
 // The root node is located at offset 0. Pointers to this node are alwaysinvalid,
 // as it would create a graph from the tree. This value is used to indicate that the node is a leaf.
-pub const ROOT_NODE_OFFSET: NodeOffset = 0;
+pub const root_node_offset: NodeOffset = 0;
 
 pub const ChildDescriptor = extern struct {
     color: Color,
@@ -27,12 +27,12 @@ pub const ChildDescriptor = extern struct {
     fn empty() ChildDescriptor {
         return .{
             .color = [_]u8{0, 0, 0, 0},
-            .node_offset = ROOT_NODE_OFFSET,
+            .node_offset = root_node_offset,
         };
     }
 
     pub fn isLeaf(self: ChildDescriptor) bool {
-        return self.node_offset == ROOT_NODE_OFFSET;
+        return self.node_offset == root_node_offset;
     }
 };
 
@@ -93,7 +93,7 @@ pub fn VoxelTree(comptime N: Index.AxisType, comptime H: u32) type {
                 try self.nodes.append(self.allocator, Node.empty());
             }
 
-            var parent_offset = ROOT_NODE_OFFSET;
+            var parent_offset = root_node_offset;
             var child_height: u32 = height - 1;
             var parent_coord = index;
 
@@ -115,7 +115,7 @@ pub fn VoxelTree(comptime N: Index.AxisType, comptime H: u32) type {
                     return;
                 }
 
-                if (child.node_offset == ROOT_NODE_OFFSET) {
+                if (child.node_offset == root_node_offset) {
                     const new_node_offset = @intCast(u32, self.nodes.items.len);
                     try self.nodes.append(self.allocator, Node.empty());
                     child.node_offset = new_node_offset;
@@ -145,7 +145,7 @@ pub fn VoxelTree(comptime N: Index.AxisType, comptime H: u32) type {
                 return null;
             }
 
-            var parent_offset = ROOT_NODE_OFFSET;
+            var parent_offset = root_node_offset;
             var child_height: u32 = height - 1;
             var parent_coord = index;
 
@@ -161,7 +161,7 @@ pub fn VoxelTree(comptime N: Index.AxisType, comptime H: u32) type {
 
                 const node = self.nodes.items[parent_offset];
                 const child = node.children[child_index.x][child_index.y][child_index.z];
-                if (child.node_offset == ROOT_NODE_OFFSET or child_height == 0) {
+                if (child.node_offset == root_node_offset or child_height == 0) {
                     return QueryResult{
                         .parent_offset = parent_offset,
                         .child_index = child_index,

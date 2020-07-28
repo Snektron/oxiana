@@ -1,7 +1,23 @@
 #version 460
 
+layout(constant_id = 2) const uint octree_height = 8;
+layout(constant_id = 3) const uint children_per_edge = 2;
+
 // keep in sync with src/renderer.zig
-layout(local_size_x = 8, local_size_y = 8) in;
+layout(local_size_x_id = 0, local_size_y_id = 1) in;
+
+const uint root_node_offset = 0;
+
+struct ChildDescriptor {
+    uint color;
+    uint node_offset;
+};
+
+struct Node {
+    // Hardcode an octree for now
+    // TODO: Use specialization constant
+    ChildDescriptor children[children_per_edge][children_per_edge][children_per_edge];
+};
 
 // keep in sync with src/renderer.zig
 layout(push_constant) uniform PushConstantBuffer {
@@ -12,6 +28,11 @@ layout(push_constant) uniform PushConstantBuffer {
 
 // keep in sync with src/renderer.zig
 layout(binding = 0, rgba8) restrict writeonly uniform image2D render_target;
+
+// keep in sync with src/renderer.zig and src/voxel_tree.zig
+layout(binding = 1) readonly buffer OctreeTree {
+    Node[] nodes;
+};
 
 const uint float_mantissa_bits = 23;
 
