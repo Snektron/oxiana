@@ -13,11 +13,55 @@ layout(push_constant) uniform PushConstantBuffer {
 // keep in sync with src/renderer.zig
 layout(binding = 0, rgba8) restrict writeonly uniform image2D render_target;
 
+const uint float_mantissa_bits = 23;
+
+vec3 adjustRay(in vec3 rd) {
+    const float epsilon = exp2(-float(float_mantissa_bits));
+    return mix(rd, vec3(epsilon), lessThan(abs(rd), vec3(epsilon)));
+}
+
+vec3 ray(in vec3 forward, in vec3 up, in vec2 uv, in vec2 dim) {
+    uv -= 0.5;
+    uv.y *= dim.y / dim.x;
+
+    vec3 right = normalize(cross(forward, up));
+    vec3 up_adjusted = normalize(cross(right, forward));
+
+    vec3 rd = normalize(uv.x * right + uv.y * up_adjusted + forward);
+    return adjustRay(rd);
+}
+
+vec2 intersectRaySphere(vec3 ro, vec3 rd, float r) {
+    float b = dot(ro, rd);
+    float c = dot(ro, ro) - r * r;
+
+    float d = b * b - c;
+    if (d < 0.0)
+        return vec2(-1, -2);
+    d = sqrt(d);
+
+    return vec2(-b - d, -b + d);
+}
+
+
 void main() {
     uvec2 index = gl_GlobalInvocationID.xy;
-    if (any(greaterThanEqual(index, imageSize(render_target)))) {
+    uvec2 render_target_dim = imageSize(render_target);
+    if (any(greaterThanEqual(index, render_target_dim))) {
         return;
     }
 
-    imageStore(render_target, ivec2(index), push.forward);
+    vec2 dim = vec2(render_target_dim);
+    vec2 uv = vec2(index) / dim;
+    vec3 rd = ray(push.forward.xyz, push.up.xyz, uv, dim);
+    vec3 ro = push.translation.xyz;
+
+    vec2 hit = intersectRaySphere(ro, rd, 1);
+    vec4 color = vec4(rd, 1);
+    if (hit.x > 0) {
+        vec3 near_intersect = ro + rd * hit.x;
+        color = vec4(vec3(dot(near_intersect, normalize(vec3(-1, -2, 1)))), 1);
+    }
+
+    imageStore(render_target, ivec2(index), color);
 }

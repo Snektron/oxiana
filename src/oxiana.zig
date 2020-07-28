@@ -26,18 +26,38 @@ const app_info = .{
     .api_version = vk.API_VERSION_1_2,
 };
 
-const mouse_sensivity = 1;
+const sensivity = .{
+    .mouse = 1,
+    .roll = 1.2,
+    .movement = 10,
+};
 
 const Input = struct {
     mouse_captured: bool,
     last_mouse_pos: math.Vec(f32, 2),
     mouse_pos: math.Vec(f32, 2),
+    forward: bool,
+    backward: bool,
+    left: bool,
+    right: bool,
+    up: bool,
+    down: bool,
+    roll_left: bool,
+    roll_right: bool,
 
     fn init() Input {
         return .{
             .mouse_captured = false,
             .last_mouse_pos = math.vec2(f32, 0, 0),
             .mouse_pos = math.vec2(f32, 0, 0),
+            .forward = false,
+            .backward = false,
+            .left = false,
+            .right = false,
+            .up = false,
+            .down = false,
+            .roll_left = false,
+            .roll_right = false,
         };
     }
 
@@ -50,12 +70,21 @@ const Input = struct {
 
     fn keyCallback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.C) void {
         const self = @ptrCast(*Input, @alignCast(@alignOf(Input), c.glfwGetWindowUserPointer(window).?));
-
+        const down = action == c.GLFW_PRESS or action == c.GLFW_REPEAT;
         switch (key) {
             c.GLFW_KEY_ESCAPE => {
+                if (down)
                 self.mouse_captured = false;
                 c.glfwSetInputMode(window, c.GLFW_CURSOR, c.GLFW_CURSOR_NORMAL);
             },
+            c.GLFW_KEY_W => self.forward = down,
+            c.GLFW_KEY_S => self.backward = down,
+            c.GLFW_KEY_D => self.right = down,
+            c.GLFW_KEY_A => self.left = down,
+            c.GLFW_KEY_SPACE => self.up = down,
+            c.GLFW_KEY_LEFT_SHIFT => self.down = down,
+            c.GLFW_KEY_Q => self.roll_left = down,
+            c.GLFW_KEY_E => self.roll_right = down,
             else => {},
         }
     }
@@ -76,6 +105,22 @@ const Input = struct {
 
     fn update(self: *Input) void {
         self.last_mouse_pos = self.mouse_pos;
+    }
+
+    fn forwardMovement(self: Input) f32 {
+        return @intToFloat(f32, @boolToInt(self.forward)) - @intToFloat(f32, @boolToInt(self.backward));
+    }
+
+    fn rightMovement(self: Input) f32 {
+        return @intToFloat(f32, @boolToInt(self.right)) - @intToFloat(f32, @boolToInt(self.left));
+    }
+
+    fn upMovement(self: Input) f32 {
+        return @intToFloat(f32, @boolToInt(self.up)) - @intToFloat(f32, @boolToInt(self.down));
+    }
+
+    fn roll(self: Input) f32 {
+        return @intToFloat(f32, @boolToInt(self.roll_right)) - @intToFloat(f32, @boolToInt(self.roll_left));
     }
 };
 
@@ -159,6 +204,8 @@ pub const Oxiana = struct {
 
     pub fn loop(self: *Oxiana) !void {
         var timer = try std.time.Timer.start();
+        var t: f32 = 0;
+        var frame: usize = 0;
 
         while (c.glfwWindowShouldClose(self.window) == c.GLFW_FALSE) {
             const swap_image = try self.swapchain.acquireNextSwapImage();
@@ -201,10 +248,22 @@ pub const Oxiana = struct {
             c.glfwPollEvents();
 
             const dt = @intToFloat(f32, timer.lap()) / std.time.ns_per_s;
+            t += dt;
+            frame += 1;
+            if (t > 1) {
+                std.debug.print("FPS: {d:.2}\n", .{ @intToFloat(f32, frame) / t});
+                t = 0;
+                frame = 0;
+            }
 
             if (self.input.mouse_captured) {
-                const mouse_movement = self.input.mouse_pos.sub(self.input.last_mouse_pos).scale(mouse_sensivity * dt);
-                self.camera.rotate(math.Quaternion(f32).axisAngle(mouse_movement.swizzle("xy0"), 1));
+                const mouse_movement = self.input.mouse_pos.sub(self.input.last_mouse_pos).scale(sensivity.mouse * dt);
+                self.camera.rotateYaw(-mouse_movement.elements[0][0]);
+                self.camera.rotatePitch(-mouse_movement.elements[0][1]);
+                self.camera.rotateRoll(self.input.roll() * sensivity.roll * dt);
+                self.camera.moveForward(self.input.forwardMovement() * sensivity.movement * dt);
+                self.camera.moveRight(-self.input.rightMovement() * sensivity.movement * dt);
+                self.camera.moveUp(-self.input.upMovement() * sensivity.movement * dt);
             }
         }
     }
