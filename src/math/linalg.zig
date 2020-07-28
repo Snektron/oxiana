@@ -291,7 +291,7 @@ pub fn vec(comptime T: type, comptime N: usize, elements: [N]T) Vec(T, N) {
 }
 
 pub fn vec2(comptime T: type, x: T, y: T) Vec(T, 2) {
-    return vec(T, 2, [_]T{ x, y, z });
+    return vec(T, 2, [_]T{ x, y });
 }
 
 pub fn vec3(comptime T: type, x: T, y: T, z: T) Vec(T, 3) {

@@ -20,8 +20,8 @@ pub fn Quaternion(comptime T: type) type {
         }
 
         pub fn axisAngle(axis: linalg.Vec(ElementType, 3), angle: ElementType) Self {
-            const cosa2 = std.math.cos(a * 0.5);
-            const sina2 = std.math.sin(a * 0.5);
+            const cosa2 = std.math.cos(angle * 0.5);
+            const sina2 = std.math.sin(angle * 0.5);
             const vec = axis.scale(sina2);
             return .{
                 .a = cosa2,
