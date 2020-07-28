@@ -19,6 +19,18 @@ pub fn Quaternion(comptime T: type) type {
             return .{.a = a, .b = b, .c = c, .d = d};
         }
 
+        pub fn axisAngle(axis: linalg.Vec(ElementType, 3), angle: ElementType) Self {
+            const cosa2 = std.math.cos(a * 0.5);
+            const sina2 = std.math.sin(a * 0.5);
+            const vec = axis.scale(sina2);
+            return .{
+                .a = cosa2,
+                .b = vec.elements[0][0],
+                .c = vec.elements[0][1],
+                .d = vec.elements[0][2],
+            };
+        }
+
         pub fn add(lhs: Self, rhs: Self) Self {
             return .{
                 .a = lhs.a + rhs.a,

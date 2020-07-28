@@ -76,6 +76,7 @@ pub const DeviceDispatch = struct {
     vkCmdBindPipeline: vk.PfnCmdBindPipeline,
     vkCmdBindDescriptorSets: vk.PfnCmdBindDescriptorSets,
     vkCmdDispatch: vk.PfnCmdDispatch,
+    vkCmdPushConstants: vk.PfnCmdPushConstants,
 
     usingnamespace vk.DeviceWrapper(@This());
 };

@@ -1,7 +1,16 @@
 #version 460
 
+// keep in sync with src/renderer.zig
 layout(local_size_x = 8, local_size_y = 8) in;
 
+// keep in sync with src/renderer.zig
+layout(push_constant) uniform PushConstantBuffer {
+    vec4 forward;
+    vec4 up;
+    vec4 translation;
+} push;
+
+// keep in sync with src/renderer.zig
 layout(binding = 0, rgba8) restrict writeonly uniform image2D render_target;
 
 void main() {
@@ -10,5 +19,5 @@ void main() {
         return;
     }
 
-    imageStore(render_target, ivec2(index), vec4(1, 0, 1, 1));
+    imageStore(render_target, ivec2(index), push.forward);
 }

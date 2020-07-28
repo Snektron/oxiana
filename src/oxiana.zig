@@ -2,6 +2,7 @@ const std = @import("std");
 const vk = @import("vulkan");
 const c = @import("c.zig");
 const gfx = @import("graphics.zig");
+const math = @import("math.zig");
 const Swapchain = @import("swapchain.zig").Swapchain;
 const Renderer = @import("renderer.zig").Renderer;
 const asManyPtr = @import("util.zig").asManyPtr;
@@ -33,6 +34,8 @@ pub const Oxiana = struct {
     device: gfx.Device,
     swapchain: Swapchain,
     renderer: Renderer,
+    camera: math.Camera,
+    mouse_captured: bool,
 
     pub fn init(allocator: *Allocator) !*Oxiana {
         // Oxiana is heap-allocated as it shouldn't move
@@ -53,6 +56,7 @@ pub const Oxiana = struct {
         c.glfwSetWindowUserPointer(self.window, @ptrCast(*c_void, self));
         _ = c.glfwSetKeyCallback(self.window, keyCallback);
         _ = c.glfwSetCursorPosCallback(self.window, cursorCallback);
+        _ = c.glfwSetMouseButtonCallback(self.window, mouseButtonCallback);
 
         const glfw_exts = blk: {
             var count: u32 = 0;
@@ -81,6 +85,13 @@ pub const Oxiana = struct {
         self.renderer = try Renderer.init(allocator, &self.device, self.swapchain.extent);
         errdefer self.renderer.deinit();
 
+        self.camera = .{
+            .rotation = math.Quaternion(f32).identity,
+            .translation = math.Vec(f32, 3).zero,
+        };
+
+        self.mouse_captured = false;
+
         return self;
     }
 
@@ -98,10 +109,27 @@ pub const Oxiana = struct {
 
     pub fn keyCallback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.C) void {
         const self = @ptrCast(*Oxiana, @alignCast(@alignOf(Oxiana), c.glfwGetWindowUserPointer(window).?));
+
+        switch (key) {
+            c.GLFW_KEY_ESCAPE => {
+                self.mouse_captured = false;
+                c.glfwSetInputMode(window, c.GLFW_CURSOR, c.GLFW_CURSOR_NORMAL);
+            },
+            else => {},
+        }
     }
 
     pub fn cursorCallback(window: ?*c.GLFWwindow, x: f64, y: f64) callconv(.C) void {
         const self = @ptrCast(*Oxiana, @alignCast(@alignOf(Oxiana), c.glfwGetWindowUserPointer(window).?));
+    }
+
+    pub fn mouseButtonCallback(window: ?*c.GLFWwindow, button: c_int, action: c_int, mods: c_int) callconv(.C) void {
+        const self = @ptrCast(*Oxiana, @alignCast(@alignOf(Oxiana), c.glfwGetWindowUserPointer(window).?));
+
+        if (button == c.GLFW_MOUSE_BUTTON_LEFT and action == c.GLFW_PRESS and !self.mouse_captured) {
+            self.mouse_captured = true;
+            c.glfwSetInputMode(window, c.GLFW_CURSOR, c.GLFW_CURSOR_DISABLED);
+        }
     }
 
     pub fn loop(self: *Oxiana) !void {
@@ -110,7 +138,7 @@ pub const Oxiana = struct {
 
         while (c.glfwWindowShouldClose(self.window) == c.GLFW_FALSE) {
             const swap_image = try self.swapchain.acquireNextSwapImage();
-            const frame_data = try self.renderer.render(self.swapchain.extent, swap_image.image);
+            const frame_data = try self.renderer.render(self.swapchain.extent, swap_image.image, self.camera);
 
             const wait_stage = [_]vk.PipelineStageFlags{.{.bottom_of_pipe_bit = true}};
             try self.device.vkd.queueSubmit(self.device.compute_queue.handle, 1, &[_]vk.SubmitInfo{.{

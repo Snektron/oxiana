@@ -3,7 +3,7 @@ const testing = std.testing;
 
 fn elementConstant(comptime ElementType: type, value: anytype) ElementType {
     return switch (@typeInfo(ElementType)) {
-        .Vector => |vec| @splat(vec.len, @as(vec.child, value)),
+        .Vector => |v| @splat(v.len, @as(v.child, value)),
         .Int, .Float => value,
         else => @compileError("Invalid element type " ++ @typeName(ElementType)), 
     };
@@ -184,6 +184,7 @@ pub fn Matrix(comptime T: type, comptime M: usize, comptime N: usize) type {
 
         pub usingnamespace if (cols == rows) SquareMatrixMixin(Self) else struct {};
         pub usingnamespace if (cols == 1) ColumnVectorMixin(Self) else struct {};
+        pub usingnamespace if (cols == 1 and rows == 3) CrossMixin(Self) else struct {};
     };
 }
 
@@ -245,10 +246,43 @@ fn ColumnVectorMixin(comptime Self: type) type {
                         self.scale(elementConstant(ElementType, 1) / mag);
             }
         }
+
+        pub fn swizzle(self: Self, comptime order: []const u8) Vec(Self.ElementType, order.len) {
+            var result: Vec(Self.ElementType, order.len) = undefined;
+
+            // TODO: Think of way to handle elements with index > 3
+            inline for (order) |c, i| {
+                result.elements[0][i] = switch (order[i]) {
+                    'x' => self.elements[0][0],
+                    'y' => self.elements[0][1],
+                    'z' => self.elements[0][2],
+                    'w' => self.elements[0][3],
+                    '0' => 0,
+                    '1' => 1,
+                    else => @compileError("Invalid order " ++ order[i]),
+                };
+            }
+
+            return result;
+        }
     };
 }
 
-pub fn Vec(comptime T, comptime N) type {
+fn CrossMixin(comptime Self: type) type {
+    std.debug.assert(Self.cols == 1 and Self.rows == 3);
+    return struct {
+        pub fn cross(lhs: Self, rhs: Self) Self {
+            return vec3(
+                Self.ElementType,
+                lhs.elements[0][1] * rhs.elements[0][2] - lhs.elements[0][2] * rhs.elements[0][1],
+                lhs.elements[0][2] * rhs.elements[0][0] - lhs.elements[0][0] * rhs.elements[0][2],
+                lhs.elements[0][0] * rhs.elements[0][1] - lhs.elements[0][1] * rhs.elements[0][0],
+            );
+        }
+    };
+}
+
+pub fn Vec(comptime T: type, comptime N: usize) type {
     return Matrix(T, 1, N);
 }
 

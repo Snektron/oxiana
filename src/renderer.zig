@@ -1,6 +1,7 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const gfx = @import("graphics.zig");
+const math = @import("math.zig");
 const Swapchain = @import("swapchain.zig").Swapchain;
 const StructOfArrays = @import("soa.zig").StructOfArrays;
 const resources = @import("resources");
@@ -12,7 +13,7 @@ const max_frames_in_flight = 2;
 // Keep in sync with shaders/traverse.comp
 const workgroup_size = vk.Extent2D{.width = 8, .height = 8};
 
-// Thus must kept in sync with the bindings in shaders/traverse.comp
+// Keep in sync with shaders/traverse.comp
 const bindings = [_]vk.DescriptorSetLayoutBinding{
     .{ // layout(binding = 0, rgba8) restrict writeonly uniform image2D render_target;
         .binding = 0,
@@ -21,6 +22,14 @@ const bindings = [_]vk.DescriptorSetLayoutBinding{
         .stage_flags = .{.compute_bit = true},
         .p_immutable_samplers = null,
     },
+};
+
+// Keep in sync with shaders/traverse.comp
+const PushConstantBuffer = extern struct {
+    // Use vec4's to get alignment correct
+    forward: math.Vec(f32, 4),
+    up: math.Vec(f32, 4),
+    translation: math.Vec(f32, 4),
 };
 
 pub const Renderer = struct {
@@ -130,12 +139,18 @@ pub const Renderer = struct {
             .p_bindings = &bindings,
         }, null);
 
+        const pcr = vk.PushConstantRange{
+            .stage_flags = .{.compute_bit = true},
+            .offset = 0,
+            .size = @sizeOf(PushConstantBuffer), 
+        };
+
         self.pipeline_layout = try self.dev.vkd.createPipelineLayout(self.dev.handle, .{
             .flags = .{},
             .set_layout_count = 1,
             .p_set_layouts = asManyPtr(&self.descriptor_set_layout),
-            .push_constant_range_count = 0,
-            .p_push_constant_ranges = undefined,
+            .push_constant_range_count = 1,
+            .p_push_constant_ranges = asManyPtr(&pcr),
         }, null);
 
         const traversal_shader = try self.dev.vkd.createShaderModule(self.dev.handle, .{
@@ -316,7 +331,7 @@ pub const Renderer = struct {
         self.updateDescriptorSets();
     }
 
-    pub fn render(self: *Renderer, extent: vk.Extent2D, swapchain_image: vk.Image) !FrameData {
+    pub fn render(self: *Renderer, extent: vk.Extent2D, swapchain_image: vk.Image, cam: math.Camera) !FrameData {
         const index = self.frame_index;
         self.frame_index = (self.frame_index + 1) % self.frame_resources.len;
 
@@ -381,6 +396,21 @@ pub const Renderer = struct {
             asManyPtr(&descriptor_set),
             0,
             undefined,
+        );
+
+        const push_constants = PushConstantBuffer{
+            .forward = cam.rotation.forward().swizzle("xyz0"),
+            .up = cam.rotation.up().swizzle("xyz0"),
+            .translation = cam.translation.swizzle("xyz0"),
+        };
+
+        self.dev.vkd.cmdPushConstants(
+            cmd_buf,
+            self.pipeline_layout,
+            .{.compute_bit = true},
+            0,
+            @sizeOf(PushConstantBuffer),
+            @ptrCast(*const c_void, &push_constants),
         );
 
         self.dev.vkd.cmdDispatch(
