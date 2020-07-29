@@ -6,8 +6,9 @@ const Swapchain = @import("swapchain.zig").Swapchain;
 const resources = @import("resources");
 const Allocator = std.mem.Allocator;
 const asManyPtr = @import("util.zig").asManyPtr;
+const vt = @import("voxel_tree.zig");
 
-const max_frames_in_flight = 2;
+pub const max_frames_in_flight = 2;
 
 const workgroup_size = vk.Extent2D{.width = 8, .height = 8};
 
@@ -43,6 +44,8 @@ pub const Renderer = struct {
         cmd_buf: vk.CommandBuffer,
     };
 
+    // hardcode the size for now
+    voxel_tree: *const vt.VoxelTree(2, 8),
     dev: *const gfx.Device,
 
     descriptor_set_layout: vk.DescriptorSetLayout,
@@ -63,8 +66,9 @@ pub const Renderer = struct {
 
     render_target_memory: vk.DeviceMemory,
 
-    pub fn init(dev: *const gfx.Device, extent: vk.Extent2D) !Renderer {
+    pub fn init(dev: *const gfx.Device, extent: vk.Extent2D, voxel_tree: *vt.VoxelTree(2, 8)) !Renderer {
         var self = Renderer{
+            .voxel_tree = voxel_tree,
             .dev = dev,
             .descriptor_set_layout = .null_handle,
             .pipeline_layout = .null_handle,

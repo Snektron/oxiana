@@ -7,6 +7,7 @@ const Swapchain = @import("swapchain.zig").Swapchain;
 const Renderer = @import("renderer.zig").Renderer;
 const asManyPtr = @import("util.zig").asManyPtr;
 const Allocator = std.mem.Allocator;
+const vt = @import("voxel_tree.zig");
 
 const initial_extent = vk.Extent2D{
     .width = 800,
@@ -124,8 +125,24 @@ const Input = struct {
     }
 };
 
+fn initTree(allocator: *Allocator) !vt.VoxelTree(2, 8) {
+    var tree = vt.VoxelTree(2, 8).init(allocator);
+    const dim = vt.VoxelTree(2, 8).side_dim_minus_one + 1;
+
+    var x: u32 = 0;
+    while (x < dim) : (x += 1) {
+        var z: u32 = 0;
+        while (z < dim) : (z += 1) {
+            try tree.set(.{.x = x, .y = 127, .z = z}, [_]u8{ @truncate(u8, x), 255, @truncate(u8, z), 255 });
+        }
+    }
+
+    return tree;
+}
+
 pub const Oxiana = struct {
     allocator: *Allocator,
+    voxel_tree: vt.VoxelTree(2, 8),
     window: *c.GLFWwindow,
     instance: gfx.Instance,
     surface: vk.SurfaceKHR,
@@ -141,6 +158,7 @@ pub const Oxiana = struct {
         errdefer allocator.destroy(self);
 
         self.allocator = allocator;
+        self.voxel_tree = try initTree(allocator);
 
         c.glfwWindowHint(c.GLFW_CLIENT_API, c.GLFW_NO_API);
         self.window = c.glfwCreateWindow(
@@ -176,7 +194,7 @@ pub const Oxiana = struct {
         });
         errdefer self.swapchain.deinit();
 
-        self.renderer = try Renderer.init(&self.device, self.swapchain.extent);
+        self.renderer = try Renderer.init(&self.device, self.swapchain.extent, &self.voxel_tree);
         errdefer self.renderer.deinit();
 
         self.camera = .{

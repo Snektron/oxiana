@@ -108,24 +108,33 @@ pub fn VoxelTree(comptime N: Index.AxisType, comptime H: u32) type {
                 };
 
                 const node = &self.nodes.items[parent_offset];
-                const child = &node.children[child_index.x][child_index.y][child_index.z];
+                var child = &node.children[child_index.x][child_index.y][child_index.z];
 
                 if (child_height == 0) {
                     child.color = color;
                     return;
                 }
 
-                if (child.node_offset == root_node_offset) {
-                    const new_node_offset = @intCast(u32, self.nodes.items.len);
-                    try self.nodes.append(self.allocator, Node.empty());
-                    child.node_offset = new_node_offset;
-                }
+                const child_node_offset = if (child.node_offset != root_node_offset)
+                        child.node_offset
+                    else blk: {
+                        const new_node_offset = @intCast(u32, self.nodes.items.len);
+                        child.node_offset = new_node_offset;
+                        self.nodes.append(self.allocator, Node.empty()) catch |err| {
+                            // Careful: After successful appending, `child` and `node` may be dangling pointers!
+                            // This is why the node offset is written to before the allocation, and optionally
+                            // restored after if it fails.
+                            child.node_offset = root_node_offset;
+                            return err;
+                        };
+                        break :blk new_node_offset;
+                    };
 
                 parent_coord.x %= child_side_dim;
                 parent_coord.y %= child_side_dim;
                 parent_coord.z %= child_side_dim;
                 child_height -= 1;
-                parent_offset = child.node_offset;
+                parent_offset = child_node_offset;
                 child_side_dim /= children_per_edge;
             }
         }
