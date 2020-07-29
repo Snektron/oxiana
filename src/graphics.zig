@@ -68,6 +68,12 @@ pub const DeviceDispatch = struct {
     vkBindImageMemory: vk.PfnBindImageMemory,
     vkAllocateMemory: vk.PfnAllocateMemory,
     vkFreeMemory: vk.PfnFreeMemory,
+    vkMapMemory: vk.PfnMapMemory,
+    vkUnmapMemory: vk.PfnUnmapMemory,
+    vkCreateBuffer: vk.PfnCreateBuffer,
+    vkDestroyBuffer: vk.PfnDestroyBuffer,
+    vkGetBufferMemoryRequirements: vk.PfnGetBufferMemoryRequirements,
+    vkBindBufferMemory: vk.PfnBindBufferMemory,
     vkBeginCommandBuffer: vk.PfnBeginCommandBuffer,
     vkEndCommandBuffer: vk.PfnEndCommandBuffer,
     vkCmdPipelineBarrier: vk.PfnCmdPipelineBarrier,
@@ -77,6 +83,7 @@ pub const DeviceDispatch = struct {
     vkCmdBindDescriptorSets: vk.PfnCmdBindDescriptorSets,
     vkCmdDispatch: vk.PfnCmdDispatch,
     vkCmdPushConstants: vk.PfnCmdPushConstants,
+    vkCmdCopyBuffer: vk.PfnCmdCopyBuffer,
 
     usingnamespace vk.DeviceWrapper(@This());
 };

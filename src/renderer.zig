@@ -44,8 +44,6 @@ pub const Renderer = struct {
         cmd_buf: vk.CommandBuffer,
     };
 
-    // hardcode the size for now
-    voxel_tree: *const vt.VoxelTree(2, 8),
     dev: *const gfx.Device,
 
     descriptor_set_layout: vk.DescriptorSetLayout,
@@ -66,9 +64,13 @@ pub const Renderer = struct {
 
     render_target_memory: vk.DeviceMemory,
 
-    pub fn init(dev: *const gfx.Device, extent: vk.Extent2D, voxel_tree: *vt.VoxelTree(2, 8)) !Renderer {
+    voxel_tree_data: struct {
+        memory: vk.DeviceMemory,
+        buffer: vk.Buffer,
+    },
+
+    pub fn init(dev: *const gfx.Device, extent: vk.Extent2D, voxel_tree: *const vt.VoxelTree(2, 8)) !Renderer {
         var self = Renderer{
-            .voxel_tree = voxel_tree,
             .dev = dev,
             .descriptor_set_layout = .null_handle,
             .pipeline_layout = .null_handle,
@@ -77,6 +79,10 @@ pub const Renderer = struct {
             .frame_index = 0,
             .frame_resources = undefined,
             .render_target_memory = .null_handle,
+            .voxel_tree_data = .{
+                .memory = .null_handle,
+                .buffer = .null_handle,
+            },
         };
 
         // To make deinit on error easier
@@ -94,6 +100,7 @@ pub const Renderer = struct {
         try self.createDescriptorSets();
         try self.createCommandBuffers();
         try self.createRenderTargets(extent);
+        try self.createVoxelTreeBuffer(voxel_tree);
         // Resource creation done at this point
         self.updateDescriptorSets();
 
@@ -102,6 +109,9 @@ pub const Renderer = struct {
 
     pub fn deinit(self: Renderer) void {
         self.deinitRenderTargets();
+
+        self.dev.vkd.destroyBuffer(self.dev.handle, self.voxel_tree_data.buffer, null);
+        self.dev.vkd.freeMemory(self.dev.handle, self.voxel_tree_data.memory, null);
 
         // The descriptor sets and command buffers do not need to be free'd, as they are freed when
         // their respective pool is destroyed.
@@ -315,6 +325,91 @@ pub const Renderer = struct {
                 },
             }, null);
         }
+    }
+
+    fn createVoxelTreeBuffer(self: *Renderer, voxel_tree: *const vt.VoxelTree(2, 8)) !void {
+        const Node = vt.VoxelTree(2, 8).Node;
+        const voxel_tree_size = voxel_tree.nodes.items.len * @sizeOf(Node);
+        self.voxel_tree_data.buffer = try self.dev.vkd.createBuffer(self.dev.handle, .{
+            .flags = .{},
+            .size = voxel_tree_size,
+            .usage = .{.transfer_dst_bit = true, .storage_buffer_bit = true},
+            .sharing_mode = .exclusive,
+            .queue_family_index_count = 0,
+            .p_queue_family_indices = undefined,
+        }, null);
+
+        const voxel_tree_mreq = self.dev.vkd.getBufferMemoryRequirements(self.dev.handle, self.voxel_tree_data.buffer);
+        self.voxel_tree_data.memory = try self.dev.allocate(voxel_tree_mreq, .{.device_local_bit = true});
+        try self.dev.vkd.bindBufferMemory(self.dev.handle, self.voxel_tree_data.buffer, self.voxel_tree_data.memory, 0);
+
+        const staging_buffer = try self.dev.vkd.createBuffer(self.dev.handle, .{
+            .flags = .{},
+            .size = voxel_tree_size,
+            .usage = .{.transfer_src_bit = true},
+            .sharing_mode = .exclusive,
+            .queue_family_index_count = 0,
+            .p_queue_family_indices = undefined,
+        }, null);
+        // We need to destroy the memory first, so just assign that to a null handle initialized object.
+        var staging_buffer_memory: vk.DeviceMemory = .null_handle;
+        defer {
+            self.dev.vkd.freeMemory(self.dev.handle, staging_buffer_memory, null);
+            self.dev.vkd.destroyBuffer(self.dev.handle, staging_buffer, null);
+        }
+
+        const staging_buffer_mreq = self.dev.vkd.getBufferMemoryRequirements(self.dev.handle, staging_buffer);
+        staging_buffer_memory = try self.dev.allocate(staging_buffer_mreq, .{.host_visible_bit = true, .host_coherent_bit = true});
+        try self.dev.vkd.bindBufferMemory(self.dev.handle, staging_buffer, staging_buffer_memory, 0);
+
+        {
+            const ptr = try self.dev.vkd.mapMemory(self.dev.handle, staging_buffer_memory, 0, voxel_tree_size, .{});
+            defer self.dev.vkd.unmapMemory(self.dev.handle, staging_buffer_memory);
+
+            const node_ptr = @ptrCast([*]vt.VoxelTree(2, 8).Node, @alignCast(@alignOf(Node), ptr.?));
+            for (voxel_tree.nodes.items) |node, i| {
+                node_ptr[i] = node;
+            }
+        }
+
+        const cmd_buf = self.frame_resources.cmd_bufs[0]; // Just steal a command buffer from here.
+        // Don't need to reset the pool, nothing has been done with it yet.
+
+        try self.dev.vkd.beginCommandBuffer(cmd_buf, .{
+            .flags = .{.one_time_submit_bit = true},
+            .p_inheritance_info = null,
+        });
+
+        const copy_info = vk.BufferCopy{
+            .src_offset = 0,
+            .dst_offset = 0,
+            .size = voxel_tree_size,
+        };
+
+        self.dev.vkd.cmdCopyBuffer(
+            cmd_buf,
+            staging_buffer,
+            self.voxel_tree_data.buffer,
+            1,
+            asManyPtr(&copy_info),
+        );
+
+        try self.dev.vkd.endCommandBuffer(cmd_buf);
+
+        const fence = self.frame_resources.frame_fences[0]; // Also steal a fence.
+        try self.dev.vkd.resetFences(self.dev.handle, 1, asManyPtr(&fence));
+
+        try self.dev.vkd.queueSubmit(self.dev.compute_queue.handle, 1, &[_]vk.SubmitInfo{.{
+            .wait_semaphore_count = 0,
+            .p_wait_semaphores = undefined,
+            .p_wait_dst_stage_mask = undefined,
+            .command_buffer_count = 1,
+            .p_command_buffers = asManyPtr(&cmd_buf),
+            .signal_semaphore_count = 0,
+            .p_signal_semaphores = undefined,
+        }}, fence);
+
+        _ = try self.dev.vkd.waitForFences(self.dev.handle, 1, asManyPtr(&fence), vk.TRUE, std.math.maxInt(u64));
     }
 
     fn updateDescriptorSets(self: Renderer) void {

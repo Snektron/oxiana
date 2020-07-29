@@ -275,9 +275,8 @@ pub const Oxiana = struct {
             }
 
             if (self.input.mouse_captured) {
-                const mouse_movement = self.input.mouse_pos.sub(self.input.last_mouse_pos).scale(sensivity.mouse * dt);
-                self.camera.rotateYaw(-mouse_movement.elements[0][0]);
-                self.camera.rotatePitch(-mouse_movement.elements[0][1]);
+                const mouse_movement = self.input.mouse_pos.sub(self.input.last_mouse_pos).scale(-sensivity.mouse * dt);
+                self.camera.rotate(math.Quaternion(f32).axisAngle(mouse_movement.swizzle("yx0"), 1));
                 self.camera.rotateRoll(self.input.roll() * sensivity.roll * dt);
                 self.camera.moveForward(self.input.forwardMovement() * sensivity.movement * dt);
                 self.camera.moveRight(-self.input.rightMovement() * sensivity.movement * dt);
