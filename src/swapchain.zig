@@ -128,7 +128,7 @@ pub const Swapchain = struct {
             .old_swapchain = self.handle,
         }, null);
         errdefer self.dev.vkd.destroySwapchainKHR(self.dev.handle, self.handle, null);
-        
+
         // Destroy the handle *after* acquiring the first frame, the give the presentation engine the opportunity
         // to finish presenting to the old frames. It's technically valid to nuke the swapchain at any point,
         // but this chould be a little more efficient.
@@ -209,7 +209,7 @@ pub const Swapchain = struct {
             .success => .optimal,
             .suboptimal_khr => .suboptimal,
             else => unreachable,
-        };   
+        };
     }
 
     fn createSwapImageView(self: Swapchain, image_index: u32) !vk.ImageView {

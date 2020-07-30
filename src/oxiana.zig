@@ -9,6 +9,8 @@ const asManyPtr = @import("util.zig").asManyPtr;
 const Allocator = std.mem.Allocator;
 const vt = @import("voxel_tree.zig");
 
+const VoxelTree = vt.VoxelTree(8, 2);
+
 const initial_extent = vk.Extent2D{
     .width = 800,
     .height = 600
@@ -125,30 +127,47 @@ const Input = struct {
     }
 };
 
-fn initTree(allocator: *Allocator) !vt.VoxelTree(2, 8) {
-    var tree = vt.VoxelTree(2, 8).init(allocator);
-    const dim = vt.VoxelTree(2, 8).side_dim_minus_one + 1;
+fn initTree(allocator: *Allocator) !VoxelTree {
+    var tree = VoxelTree.init(allocator);
+    const dim = VoxelTree.side_dim_minus_one;
 
     var x: u32 = 0;
-    while (x < dim) : (x += 1) {
+    while (x <= dim) : (x += 1) {
         var z: u32 = 0;
-        while (z < dim) : (z += 1) {
-            try tree.set(.{.x = x, .y = 127, .z = z}, [_]u8{ @truncate(u8, x), 255, @truncate(u8, z), 255 });
+        while (z <= dim) : (z += 1) {
+            var y: u32 = 0;
+            while (y <= dim) : (y += 1) {
+                if (x * x + y * y + z * z < (dim + 1) * (dim + 1)) {
+                    try tree.set(
+                        .{.x = x, .y = y, .z = z},
+                        [_]u8{
+                            @truncate(u8, x * 255 / dim),
+                            @truncate(u8, y * 255 / dim),
+                            @truncate(u8, z * 255 / dim),
+                            255,
+                        },
+                    );
+                }
+            }
         }
     }
+
+    std.log.info(.oxiana, "Voxel tree size: {} nodes, {} KiB\n",
+        .{ tree.nodes.items.len, tree.nodes.items.len * @sizeOf(VoxelTree.Node) / 1024 }
+    );
 
     return tree;
 }
 
 pub const Oxiana = struct {
     allocator: *Allocator,
-    voxel_tree: vt.VoxelTree(2, 8),
+    voxel_tree: VoxelTree,
     window: *c.GLFWwindow,
     instance: gfx.Instance,
     surface: vk.SurfaceKHR,
     device: gfx.Device,
     swapchain: Swapchain,
-    renderer: Renderer,
+    renderer: Renderer(VoxelTree),
     camera: math.Camera,
     input: Input,
 
@@ -169,7 +188,7 @@ pub const Oxiana = struct {
             null
         ) orelse return error.WindowInitFailed;
         errdefer c.glfwDestroyWindow(self.window);
-        
+
         const glfw_exts = blk: {
             var count: u32 = 0;
             const exts = c.glfwGetRequiredInstanceExtensions(&count);
@@ -194,7 +213,7 @@ pub const Oxiana = struct {
         });
         errdefer self.swapchain.deinit();
 
-        self.renderer = try Renderer.init(&self.device, self.swapchain.extent, &self.voxel_tree);
+        self.renderer = try Renderer(VoxelTree).init(&self.device, self.swapchain.extent, &self.voxel_tree);
         errdefer self.renderer.deinit();
 
         self.camera = .{
@@ -277,7 +296,7 @@ pub const Oxiana = struct {
             if (self.input.mouse_captured) {
                 const mouse_movement = self.input.mouse_pos.sub(self.input.last_mouse_pos).scale(-sensivity.mouse * dt);
                 self.camera.rotate(math.Quaternion(f32).axisAngle(mouse_movement.swizzle("yx0"), 1));
-                self.camera.rotateRoll(self.input.roll() * sensivity.roll * dt);
+                self.camera.rotateRoll(-self.input.roll() * sensivity.roll * dt);
                 self.camera.moveForward(self.input.forwardMovement() * sensivity.movement * dt);
                 self.camera.moveRight(-self.input.rightMovement() * sensivity.movement * dt);
                 self.camera.moveUp(-self.input.upMovement() * sensivity.movement * dt);

@@ -5,7 +5,7 @@ fn elementConstant(comptime ElementType: type, value: anytype) ElementType {
     return switch (@typeInfo(ElementType)) {
         .Vector => |v| @splat(v.len, @as(v.child, value)),
         .Int, .Float => value,
-        else => @compileError("Invalid element type " ++ @typeName(ElementType)), 
+        else => @compileError("Invalid element type " ++ @typeName(ElementType)),
     };
 }
 

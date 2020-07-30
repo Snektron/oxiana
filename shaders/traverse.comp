@@ -1,7 +1,10 @@
 #version 460
 
-layout(constant_id = 2) const uint octree_height = 8;
-layout(constant_id = 3) const uint children_per_edge = 2;
+layout(constant_id = 2) const uint voxel_tree_height = 8;
+layout(constant_id = 3) const uint children_per_edge = 16;
+layout(constant_id = 4) const uint side_dim_minus_one = 255;
+const uint children_per_node = children_per_edge * children_per_edge * children_per_edge;
+
 
 // keep in sync with src/renderer.zig
 layout(local_size_x_id = 0, local_size_y_id = 1) in;
@@ -15,11 +18,6 @@ struct ChildDescriptor {
     uint node_offset;
 };
 
-// keep in sync with src/voxel_octree.zig
-struct Node {
-    ChildDescriptor[children_per_edge][children_per_edge][children_per_edge] children;
-};
-
 // keep in sync with src/renderer.zig
 layout(push_constant) uniform PushConstantBuffer {
     vec4 forward;
@@ -31,11 +29,18 @@ layout(push_constant) uniform PushConstantBuffer {
 layout(binding = 0, rgba8) restrict writeonly uniform image2D render_target;
 
 // keep in sync with src/renderer.zig and src/voxel_tree.zig
-layout(binding = 1) readonly buffer OctreeTree {
-    Node[] nodes;
-};
+layout(binding = 1) readonly buffer VoxelTree {
+    // Specialization constants do not work on array sizes in structs, so
+    // the indexing is performed manually.
+    ChildDescriptor[] children;
+} tree;
 
 const uint float_mantissa_bits = 23;
+
+ChildDescriptor getChildDescriptor(uint node_offset, uvec3 child_index) {
+    uint child_offset = (child_index.x * children_per_edge + child_index.y) * children_per_edge + child_index.z;
+    return tree.children[node_offset * children_per_node + child_offset];
+}
 
 vec3 adjustRay(in vec3 rd) {
     const float epsilon = exp2(-float(float_mantissa_bits));
@@ -53,18 +58,78 @@ vec3 ray(in vec3 forward, in vec3 up, in vec2 uv, in vec2 dim) {
     return adjustRay(rd);
 }
 
-vec2 intersectRaySphere(vec3 ro, vec3 rd, float r) {
-    float b = dot(ro, rd);
-    float c = dot(ro, ro) - r * r;
+vec4 traverseInt(in uvec3 pos) {
+    uint parent_offset = root_node_offset;
+    uint child_side_dim = side_dim_minus_one / children_per_edge + 1;
 
-    float d = b * b - c;
-    if (d < 0.0)
-        return vec2(-1, -2);
-    d = sqrt(d);
+    while (true) {
+        uvec3 child_index = pos / child_side_dim;
 
-    return vec2(-b - d, -b + d);
+        ChildDescriptor child = getChildDescriptor(parent_offset, child_index);
+        if (child.node_offset == root_node_offset) {
+            return unpackUnorm4x8(child.color);
+        }
+
+        pos %= child_side_dim;
+        parent_offset = child.node_offset;
+        child_side_dim /= children_per_edge;
+    }
 }
 
+float minElement(vec3 x) {
+    return min(x.x, min(x.y, x.z));
+}
+
+float maxElement(vec3 x) {
+    return max(x.x, max(x.y, x.z));
+}
+
+vec3 trace(vec3 ro, vec3 rd) {
+    vec3 rrd = 1.0 / rd;
+    vec3 bias = rrd * ro;
+
+    vec3 box_min = -bias;
+    vec3 box_max = vec3(side_dim_minus_one + 1) * rrd - bias;
+
+    float t_min = maxElement(min(box_min, box_max));
+    float t_max = minElement(max(box_min, box_max));
+
+    if (t_min > t_max) {
+        // Ray misses bounding cube
+        return rd;
+    }
+
+    t_min = max(t_min, 0);
+    t_min += 0.0001;
+    t_max -= 0.0001;
+
+    ro += rd * t_min;
+    ivec3 pos = ivec3(ro);
+
+    vec3 t_delta = abs(rrd);
+    vec3 sgn = sign(rd);
+    ivec3 step = ivec3(sgn);
+    vec3 side_dist = (sgn * (floor(ro) - ro + 0.5) + 0.5) * t_delta;
+
+    float t = 0;
+
+    while (t < t_max - t_min) {
+        bvec3 mask = lessThanEqual(side_dist.xyz, min(side_dist.yzx, side_dist.zxy));
+
+        float t0 = minElement(side_dist);
+        vec4 color = traverseInt(uvec3(pos));
+        if (color.a > 0.5) {
+            return color.rgb;
+        }
+
+        t = t0;
+
+        side_dist += mix(vec3(0), t_delta, mask);
+        pos += mix(ivec3(0), step, mask);
+    }
+
+    return rd;
+}
 
 void main() {
     uvec2 index = gl_GlobalInvocationID.xy;
@@ -78,12 +143,7 @@ void main() {
     vec3 rd = ray(push.forward.xyz, push.up.xyz, uv, dim);
     vec3 ro = push.translation.xyz;
 
-    vec2 hit = intersectRaySphere(ro, rd, 1);
-    vec4 color = vec4(rd, 1);
-    if (hit.x > 0) {
-        vec3 near_intersect = ro + rd * hit.x;
-        color = vec4(vec3(dot(near_intersect, normalize(vec3(-1, -2, 1)))), 1);
-    }
+    vec3 color = trace(ro, rd);
 
-    imageStore(render_target, ivec2(index), color);
+    imageStore(render_target, ivec2(index), vec4(color, 1));
 }
