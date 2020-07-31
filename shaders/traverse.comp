@@ -1,22 +1,7 @@
 #version 460
 
-layout(constant_id = 2) const uint voxel_tree_height = 8;
-layout(constant_id = 3) const uint children_per_edge = 16;
-layout(constant_id = 4) const uint side_dim_minus_one = 255;
-const uint children_per_node = children_per_edge * children_per_edge * children_per_edge;
-
-
 // keep in sync with src/renderer.zig
 layout(local_size_x_id = 0, local_size_y_id = 1) in;
-
-// keep in sync with src/voxel_octree.zig
-const uint root_node_offset = 0;
-
-// keep in sync with src/voxel_octree.zig
-struct ChildDescriptor {
-    uint color;
-    uint node_offset;
-};
 
 // keep in sync with src/renderer.zig
 layout(push_constant) uniform PushConstantBuffer {
@@ -28,19 +13,9 @@ layout(push_constant) uniform PushConstantBuffer {
 // keep in sync with src/renderer.zig
 layout(binding = 0, rgba8) restrict writeonly uniform image2D render_target;
 
-// keep in sync with src/renderer.zig and src/voxel_tree.zig
-layout(binding = 1) readonly buffer VoxelTree {
-    // Specialization constants do not work on array sizes in structs, so
-    // the indexing is performed manually.
-    ChildDescriptor[] children;
-} tree;
+layout(binding = 1) uniform usampler3D volume;
 
 const uint float_mantissa_bits = 23;
-
-ChildDescriptor getChildDescriptor(uint node_offset, uvec3 child_index) {
-    uint child_offset = (child_index.x * children_per_edge + child_index.y) * children_per_edge + child_index.z;
-    return tree.children[node_offset * children_per_node + child_offset];
-}
 
 vec3 adjustRay(in vec3 rd) {
     const float epsilon = exp2(-float(float_mantissa_bits));
@@ -58,22 +33,16 @@ vec3 ray(in vec3 forward, in vec3 up, in vec2 uv, in vec2 dim) {
     return adjustRay(rd);
 }
 
-vec4 traverseInt(in uvec3 pos) {
-    uint parent_offset = root_node_offset;
-    uint child_side_dim = side_dim_minus_one / children_per_edge + 1;
+vec3 decodeR3G3B2(uint color) {
+    uint red = bitfieldExtract(color, 5, 3);
+    uint green = bitfieldExtract(color, 2, 3);
+    uint blue = bitfieldExtract(color, 0, 2);
 
-    while (true) {
-        uvec3 child_index = pos / child_side_dim;
-
-        ChildDescriptor child = getChildDescriptor(parent_offset, child_index);
-        if (child.node_offset == root_node_offset) {
-            return unpackUnorm4x8(child.color);
-        }
-
-        pos %= child_side_dim;
-        parent_offset = child.node_offset;
-        child_side_dim /= children_per_edge;
-    }
+    return vec3(
+        red * (1 << (8 - 3)),
+        green * (1 << (8 - 3)),
+        blue * (1 << (8 - 2))
+    ) / 256.0;
 }
 
 float minElement(vec3 x) {
@@ -89,19 +58,17 @@ vec3 trace(vec3 ro, vec3 rd) {
     vec3 bias = rrd * ro;
 
     vec3 box_min = -bias;
-    vec3 box_max = vec3(side_dim_minus_one + 1) * rrd - bias;
+    vec3 box_max = vec3(textureSize(volume, 0)) * rrd - bias;
 
     float t_min = maxElement(min(box_min, box_max));
     float t_max = minElement(max(box_min, box_max));
 
     if (t_min > t_max) {
         // Ray misses bounding cube
-        return rd;
+        return vec3(rd);
     }
 
-    t_min = max(t_min, 0);
-    t_min += 0.0001;
-    t_max -= 0.0001;
+    t_min = max(t_min, 0) + 0.0001;
 
     ro += rd * t_min;
     ivec3 pos = ivec3(ro);
@@ -117,9 +84,9 @@ vec3 trace(vec3 ro, vec3 rd) {
         bvec3 mask = lessThanEqual(side_dist.xyz, min(side_dist.yzx, side_dist.zxy));
 
         float t0 = minElement(side_dist);
-        vec4 color = traverseInt(uvec3(pos));
-        if (color.a > 0.5) {
-            return color.rgb;
+        uint voxel = texelFetch(volume, pos, 0).r;
+        if (voxel != 0) {
+            return decodeR3G3B2(voxel);
         }
 
         t = t0;
@@ -130,6 +97,7 @@ vec3 trace(vec3 ro, vec3 rd) {
 
     return rd;
 }
+
 
 void main() {
     uvec2 index = gl_GlobalInvocationID.xy;
@@ -142,8 +110,6 @@ void main() {
     vec2 uv = vec2(index) / dim;
     vec3 rd = ray(push.forward.xyz, push.up.xyz, uv, dim);
     vec3 ro = push.translation.xyz;
-
     vec3 color = trace(ro, rd);
-
     imageStore(render_target, ivec2(index), vec4(color, 1));
 }

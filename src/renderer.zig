@@ -20,9 +20,9 @@ const bindings = [_]vk.DescriptorSetLayoutBinding{
         .stage_flags = .{.compute_bit = true},
         .p_immutable_samplers = null,
     },
-    .{ // layout(binding = 1) readonly buffer OctreeTree
+    .{ // layout(binding = 1) uniform sampler3D volume;
         .binding = 1,
-        .descriptor_type = .storage_buffer,
+        .descriptor_type = .combined_image_sampler,
         .descriptor_count = 1,
         .stage_flags = .{.compute_bit = true},
         .p_immutable_samplers = null,
@@ -37,7 +37,94 @@ const PushConstantBuffer = extern struct {
     translation: math.Vec(f32, 4),
 };
 
-pub fn Renderer(comptime VoxelTree: type) type {
+fn GpuVolume(comptime Volume: type) type {
+    std.debug.assert(Volume.ElementType == u8);
+    return struct {
+        const Self = @This();
+        memory: vk.DeviceMemory,
+        image: vk.Image,
+        view: vk.ImageView,
+        sampler: vk.Sampler,
+
+        fn init(dev: *const gfx.Device) !Self {
+            var self = Self{
+                .memory = .null_handle,
+                .image = .null_handle,
+                .view = .null_handle,
+                .sampler = .null_handle,
+            };
+            errdefer self.deinit(dev);
+
+            const format = .r8_uint;
+
+            self.image = try dev.vkd.createImage(dev.handle, .{
+                .flags = .{},
+                .image_type = .@"3d",
+                .format = format,
+                .extent = .{.width = Volume.side_dim, .height = Volume.side_dim, .depth = Volume.side_dim},
+                .mip_levels = 1,
+                .array_layers = 1,
+                .samples = .{.@"1_bit" = true},
+                .tiling = .optimal,
+                .usage = .{.sampled_bit = true, .transfer_dst_bit = true},
+                .sharing_mode = .exclusive,
+                .queue_family_index_count = 0,
+                .p_queue_family_indices = undefined,
+                .initial_layout = .@"undefined",
+            }, null);
+
+            var mem_reqs = dev.vkd.getImageMemoryRequirements(dev.handle, self.image);
+            self.memory = try dev.allocate(mem_reqs, .{.device_local_bit = true});
+
+            try dev.vkd.bindImageMemory(dev.handle, self.image, self.memory, 0);
+
+            self.view = try dev.vkd.createImageView(dev.handle, .{
+                .flags = .{},
+                .image = self.image,
+                .view_type = .@"3d",
+                .format = format,
+                .components = .{.r = .identity, .g = .identity, .b = .identity, .a = .identity},
+                .subresource_range = .{
+                    .aspect_mask = .{.color_bit = true},
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+            }, null);
+
+            self.sampler = try dev.vkd.createSampler(dev.handle, .{
+                .flags = .{},
+                .mag_filter = .nearest,
+                .min_filter = .nearest,
+                .mipmap_mode = .nearest,
+                .address_mode_u = .clamp_to_border,
+                .address_mode_v = .clamp_to_border,
+                .address_mode_w = .clamp_to_border,
+                .mip_lod_bias = 0,
+                .anisotropy_enable = vk.FALSE,
+                .max_anisotropy = 0,
+                .compare_enable = vk.FALSE,
+                .compare_op = .always,
+                .min_lod = 0,
+                .max_lod = 0,
+                .border_color = .int_transparent_black,
+                .unnormalized_coordinates = vk.FALSE,
+            }, null);
+
+            return self;
+        }
+
+        fn deinit(self: Self, dev: *const gfx.Device) void {
+            dev.vkd.destroySampler(dev.handle, self.sampler, null);
+            dev.vkd.destroyImageView(dev.handle, self.view, null);
+            dev.vkd.destroyImage(dev.handle, self.image, null);
+            dev.vkd.freeMemory(dev.handle, self.memory, null);
+        }
+    };
+}
+
+pub fn Renderer(comptime Volume: type) type {
     return struct {
         const Self = @This();
         pub const FrameData = struct {
@@ -65,13 +152,9 @@ pub fn Renderer(comptime VoxelTree: type) type {
 
         render_target_memory: vk.DeviceMemory,
 
-        voxel_tree_data: struct {
-            memory: vk.DeviceMemory,
-            buffer: vk.Buffer,
-            size: vk.DeviceSize,
-        },
+        gpu_volume: GpuVolume(Volume),
 
-        pub fn init(dev: *const gfx.Device, extent: vk.Extent2D, voxel_tree: *const VoxelTree) !Self {
+        pub fn init(dev: *const gfx.Device, extent: vk.Extent2D, volume: *const Volume) !Self {
             var self = Self{
                 .dev = dev,
                 .descriptor_set_layout = .null_handle,
@@ -81,10 +164,11 @@ pub fn Renderer(comptime VoxelTree: type) type {
                 .frame_index = 0,
                 .frame_resources = undefined,
                 .render_target_memory = .null_handle,
-                .voxel_tree_data = .{
+                .gpu_volume = .{
                     .memory = .null_handle,
-                    .buffer = .null_handle,
-                    .size = 0,
+                    .image = .null_handle,
+                    .view = .null_handle,
+                    .sampler = .null_handle,
                 },
             };
 
@@ -103,8 +187,10 @@ pub fn Renderer(comptime VoxelTree: type) type {
             try self.createDescriptorSets();
             try self.createCommandBuffers();
             try self.createRenderTargets(extent);
-            try self.createVoxelTreeBuffer(voxel_tree);
+            self.gpu_volume = try GpuVolume(Volume).init(dev);
+
             // Resource creation done at this point
+            try self.uploadVolume(volume);
             self.updateDescriptorSets();
 
             return self;
@@ -112,9 +198,7 @@ pub fn Renderer(comptime VoxelTree: type) type {
 
         pub fn deinit(self: Self) void {
             self.deinitRenderTargets();
-
-            self.dev.vkd.destroyBuffer(self.dev.handle, self.voxel_tree_data.buffer, null);
-            self.dev.vkd.freeMemory(self.dev.handle, self.voxel_tree_data.memory, null);
+            self.gpu_volume.deinit(self.dev);
 
             // The descriptor sets and command buffers do not need to be free'd, as they are freed when
             // their respective pool is destroyed.
@@ -179,19 +263,13 @@ pub fn Renderer(comptime VoxelTree: type) type {
             defer self.dev.vkd.destroyShaderModule(self.dev.handle, traversal_shader, null);
 
             const entries = [_]vk.SpecializationMapEntry{
-                .{.constant_id = 0, .offset = 0, .size = @sizeOf(u32)},
-                .{.constant_id = 1, .offset = 4, .size = @sizeOf(u32)},
-                .{.constant_id = 2, .offset = 8, .size = @sizeOf(u32)}, // voxel_tree_height
-                .{.constant_id = 3, .offset = 12, .size = @sizeOf(u32)}, // children_per_edge
-                .{.constant_id = 4, .offset = 16, .size = @sizeOf(u32)}, // side_dim_minus_one
+                .{.constant_id = 0, .offset = 0, .size = @sizeOf(u32)}, // workgroup width
+                .{.constant_id = 1, .offset = 4, .size = @sizeOf(u32)}, // workgroup height
             };
 
             const specialization_data = [_]u32{
                 workgroup_size.width,
                 workgroup_size.height,
-                VoxelTree.height,
-                VoxelTree.children_per_edge,
-                VoxelTree.side_dim_minus_one,
             };
 
             const specialization_info = vk.SpecializationInfo{
@@ -333,25 +411,11 @@ pub fn Renderer(comptime VoxelTree: type) type {
             }
         }
 
-        fn createVoxelTreeBuffer(self: *Self, voxel_tree: *const VoxelTree) !void {
-            const voxel_tree_size = voxel_tree.nodes.items.len * @sizeOf(VoxelTree.Node);
-            self.voxel_tree_data.size = voxel_tree_size;
-            self.voxel_tree_data.buffer = try self.dev.vkd.createBuffer(self.dev.handle, .{
-                .flags = .{},
-                .size = voxel_tree_size,
-                .usage = .{.transfer_dst_bit = true, .storage_buffer_bit = true},
-                .sharing_mode = .exclusive,
-                .queue_family_index_count = 0,
-                .p_queue_family_indices = undefined,
-            }, null);
-
-            const voxel_tree_mreq = self.dev.vkd.getBufferMemoryRequirements(self.dev.handle, self.voxel_tree_data.buffer);
-            self.voxel_tree_data.memory = try self.dev.allocate(voxel_tree_mreq, .{.device_local_bit = true});
-            try self.dev.vkd.bindBufferMemory(self.dev.handle, self.voxel_tree_data.buffer, self.voxel_tree_data.memory, 0);
-
+        fn uploadVolume(self: Self, volume: *const Volume) !void {
+            const size = Volume.side_dim * Volume.side_dim * Volume.side_dim;
             const staging_buffer = try self.dev.vkd.createBuffer(self.dev.handle, .{
                 .flags = .{},
-                .size = voxel_tree_size,
+                .size = size,
                 .usage = .{.transfer_src_bit = true},
                 .sharing_mode = .exclusive,
                 .queue_family_index_count = 0,
@@ -369,12 +433,18 @@ pub fn Renderer(comptime VoxelTree: type) type {
             try self.dev.vkd.bindBufferMemory(self.dev.handle, staging_buffer, staging_buffer_memory, 0);
 
             {
-                const ptr = try self.dev.vkd.mapMemory(self.dev.handle, staging_buffer_memory, 0, voxel_tree_size, .{});
+                const ptr = try self.dev.vkd.mapMemory(self.dev.handle, staging_buffer_memory, 0, size, .{});
                 defer self.dev.vkd.unmapMemory(self.dev.handle, staging_buffer_memory);
+                const voxels = @ptrCast([*]u8, ptr.?);
 
-                const node_ptr = @ptrCast([*]VoxelTree.Node, @alignCast(@alignOf(VoxelTree.Node), ptr.?));
-                for (voxel_tree.nodes.items) |node, i| {
-                    node_ptr[i] = node;
+                var i: usize = 0;
+                for (volume.voxels) |plane| {
+                    for (plane) |row| {
+                        for (row) |voxel| {
+                            voxels[i] = voxel;
+                            i += 1;
+                        }
+                    }
                 }
             }
 
@@ -386,19 +456,86 @@ pub fn Renderer(comptime VoxelTree: type) type {
                 .p_inheritance_info = null,
             });
 
-            const copy_info = vk.BufferCopy{
-                .src_offset = 0,
-                .dst_offset = 0,
-                .size = voxel_tree_size,
+            const subresource_range = vk.ImageSubresourceRange{
+                .aspect_mask = .{.color_bit = true},
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
             };
 
-            self.dev.vkd.cmdCopyBuffer(
-                cmd_buf,
-                staging_buffer,
-                self.voxel_tree_data.buffer,
-                1,
-                asManyPtr(&copy_info),
-            );
+            {
+                const barriers = [_]vk.ImageMemoryBarrier{
+                    .{
+                        .src_access_mask = .{},
+                        .dst_access_mask = .{},
+                        .old_layout = .@"undefined",
+                        .new_layout = .transfer_dst_optimal,
+                        .src_queue_family_index = self.dev.compute_queue.family,
+                        .dst_queue_family_index = self.dev.compute_queue.family,
+                        .image = self.gpu_volume.image,
+                        .subresource_range = subresource_range,
+                    },
+                };
+                self.dev.vkd.cmdPipelineBarrier(
+                    cmd_buf,
+                    .{.top_of_pipe_bit = true},
+                    .{.transfer_bit = true},
+                    .{},
+                    0, undefined,
+                    0, undefined,
+                    barriers.len, &barriers
+                );
+            }
+
+            {
+                const copy_info = vk.BufferImageCopy{
+                    .buffer_offset = 0,
+                    .buffer_row_length = 0,
+                    .buffer_image_height = 0,
+                    .image_subresource = .{
+                        .aspect_mask = .{.color_bit = true},
+                        .mip_level = 0,
+                        .base_array_layer = 0,
+                        .layer_count = 1,
+                    },
+                    .image_offset = .{.x = 0, .y = 0, .z = 0},
+                    .image_extent = .{.width = Volume.side_dim, .height = Volume.side_dim, .depth = Volume.side_dim},
+                };
+
+                self.dev.vkd.cmdCopyBufferToImage(
+                    cmd_buf,
+                    staging_buffer,
+                    self.gpu_volume.image,
+                    .transfer_dst_optimal,
+                    1,
+                    asManyPtr(&copy_info),
+                );
+            }
+
+            {
+                const barriers = [_]vk.ImageMemoryBarrier{
+                    .{
+                        .src_access_mask = .{},
+                        .dst_access_mask = .{},
+                        .old_layout = .transfer_dst_optimal,
+                        .new_layout = .shader_read_only_optimal,
+                        .src_queue_family_index = self.dev.compute_queue.family,
+                        .dst_queue_family_index = self.dev.compute_queue.family,
+                        .image = self.gpu_volume.image,
+                        .subresource_range = subresource_range,
+                    },
+                };
+                self.dev.vkd.cmdPipelineBarrier(
+                    cmd_buf,
+                    .{.transfer_bit = true},
+                    .{.bottom_of_pipe_bit = true},
+                    .{},
+                    0, undefined,
+                    0, undefined,
+                    barriers.len, &barriers
+                );
+            }
 
             try self.dev.vkd.endCommandBuffer(cmd_buf);
 
@@ -426,10 +563,10 @@ pub fn Renderer(comptime VoxelTree: type) type {
                     .image_layout = .general,
                 };
 
-                const voxel_tree_write = vk.DescriptorBufferInfo{
-                    .buffer = self.voxel_tree_data.buffer,
-                    .offset = 0,
-                    .range = self.voxel_tree_data.size,
+                const volume_write = vk.DescriptorImageInfo{
+                    .sampler = self.gpu_volume.sampler,
+                    .image_view = self.gpu_volume.view,
+                    .image_layout = .shader_read_only_optimal,
                 };
 
                 const writes = [_]vk.WriteDescriptorSet{
@@ -449,10 +586,10 @@ pub fn Renderer(comptime VoxelTree: type) type {
                         .dst_array_element = 0,
                         .descriptor_count = 1,
                         .descriptor_type = bindings[1].descriptor_type,
-                        .p_image_info = undefined,
-                        .p_buffer_info = asManyPtr(&voxel_tree_write),
+                        .p_image_info = asManyPtr(&volume_write),
+                        .p_buffer_info = undefined,
                         .p_texel_buffer_view = undefined,
-                    }
+                    },
                 };
 
                 // Could do a single updateDescriptorSets, but that would require allocating an array of writes.

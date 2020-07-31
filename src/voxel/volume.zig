@@ -5,6 +5,14 @@ pub fn VoxelVolume(comptime log2_side_dim: u4, comptime T: type) type {
         const Self = @This();
         pub const ElementType = T;
         pub const side_dim = 1 << log2_side_dim;
-        voxels: [side_dim][side_dim][side_dim]T;
+        voxels: [side_dim][side_dim][side_dim]T,
+
+        pub fn clear(self: *Self, data: T) void {
+            for (self.voxels) |*plane| {
+                for (plane) |*row| {
+                    for (row) |*voxel| voxel.* = data;
+                }
+            }
+        }
     };
 }

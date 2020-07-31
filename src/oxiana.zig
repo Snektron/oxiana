@@ -3,13 +3,13 @@ const vk = @import("vulkan");
 const c = @import("c.zig");
 const gfx = @import("graphics.zig");
 const math = @import("math.zig");
+const vv = @import("voxel/volume.zig");
 const Swapchain = @import("swapchain.zig").Swapchain;
 const Renderer = @import("renderer.zig").Renderer;
 const asManyPtr = @import("util.zig").asManyPtr;
 const Allocator = std.mem.Allocator;
-const vt = @import("voxel_tree.zig");
 
-const VoxelTree = vt.VoxelTree(8, 2);
+const VoxelVolume = vv.VoxelVolume(8, u8); // 2 ^ 8 = 256
 
 const initial_extent = vk.Extent2D{
     .width = 800,
@@ -32,7 +32,7 @@ const app_info = .{
 const sensivity = .{
     .mouse = 1,
     .roll = 1.2,
-    .movement = 10,
+    .movement = 100,
 };
 
 const Input = struct {
@@ -127,47 +127,41 @@ const Input = struct {
     }
 };
 
-fn initTree(allocator: *Allocator) !VoxelTree {
-    var tree = VoxelTree.init(allocator);
-    const dim = VoxelTree.side_dim_minus_one;
+fn encodeR3G3B2(red: u3, green: u3, blue: u2) u8 {
+    return (@as(u8, red) << (2 + 3)) | (@as(u8, green) << 2) | @as(u8, blue);
+}
+
+fn initVolume(allocator: *Allocator) !*VoxelVolume {
+    const volume = try allocator.create(VoxelVolume);
+    volume.clear(0);
+    const dim = VoxelVolume.side_dim;
 
     var x: u32 = 0;
-    while (x <= dim) : (x += 1) {
-        var z: u32 = 0;
-        while (z <= dim) : (z += 1) {
-            var y: u32 = 0;
-            while (y <= dim) : (y += 1) {
+    while (x < dim) : (x += 1) {
+        var y: u32 = 0;
+        while (y < dim) : (y += 1) {
+            var z: u32 = 0;
+            while (z < dim) : (z += 1) {
                 if (x * x + y * y + z * z < (dim + 1) * (dim + 1)) {
-                    try tree.set(
-                        .{.x = x, .y = y, .z = z},
-                        [_]u8{
-                            @truncate(u8, x * 255 / dim),
-                            @truncate(u8, y * 255 / dim),
-                            @truncate(u8, z * 255 / dim),
-                            255,
-                        },
-                    );
+                    const color = encodeR3G3B2(@truncate(u3, x), @truncate(u3, y), @truncate(u2, z));
+                    volume.voxels[x][y][z] = color;
                 }
             }
         }
     }
 
-    std.log.info(.oxiana, "Voxel tree size: {} nodes, {} KiB\n",
-        .{ tree.nodes.items.len, tree.nodes.items.len * @sizeOf(VoxelTree.Node) / 1024 }
-    );
-
-    return tree;
+    return volume;
 }
 
 pub const Oxiana = struct {
     allocator: *Allocator,
-    voxel_tree: VoxelTree,
+    volume: *VoxelVolume,
     window: *c.GLFWwindow,
     instance: gfx.Instance,
     surface: vk.SurfaceKHR,
     device: gfx.Device,
     swapchain: Swapchain,
-    renderer: Renderer(VoxelTree),
+    renderer: Renderer(VoxelVolume),
     camera: math.Camera,
     input: Input,
 
@@ -177,7 +171,7 @@ pub const Oxiana = struct {
         errdefer allocator.destroy(self);
 
         self.allocator = allocator;
-        self.voxel_tree = try initTree(allocator);
+        self.volume = try initVolume(allocator);
 
         c.glfwWindowHint(c.GLFW_CLIENT_API, c.GLFW_NO_API);
         self.window = c.glfwCreateWindow(
@@ -213,7 +207,7 @@ pub const Oxiana = struct {
         });
         errdefer self.swapchain.deinit();
 
-        self.renderer = try Renderer(VoxelTree).init(&self.device, self.swapchain.extent, &self.voxel_tree);
+        self.renderer = try Renderer(VoxelVolume).init(&self.device, self.swapchain.extent, self.volume);
         errdefer self.renderer.deinit();
 
         self.camera = .{
@@ -236,6 +230,7 @@ pub const Oxiana = struct {
         self.instance.vki.destroySurfaceKHR(self.instance.handle, self.surface, null);
         self.instance.deinit();
         c.glfwDestroyWindow(self.window);
+        self.allocator.destroy(self.volume);
         self.allocator.destroy(self);
     }
 
