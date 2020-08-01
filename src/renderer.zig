@@ -26,6 +26,13 @@ const bindings = [_]vk.DescriptorSetLayoutBinding{
         .descriptor_count = 1,
         .stage_flags = .{.compute_bit = true},
         .p_immutable_samplers = null,
+    },
+    .{ // layout(binding = 2) uniform sampler3D mask_volume;
+        .binding = 2,
+        .descriptor_type = .combined_image_sampler,
+        .descriptor_count = 1,
+        .stage_flags = .{.compute_bit = true},
+        .p_immutable_samplers = null,
     }
 };
 
@@ -131,6 +138,7 @@ pub fn Renderer(comptime Volume: type) type {
             frame_fence: vk.Fence,
             cmd_buf: vk.CommandBuffer,
         };
+        const MaskVolume = @import("voxel/volume.zig").VoxelVolume(Volume.log2_side_dim - 3, u8);
 
         dev: *const gfx.Device,
 
@@ -153,6 +161,7 @@ pub fn Renderer(comptime Volume: type) type {
         render_target_memory: vk.DeviceMemory,
 
         gpu_volume: GpuVolume(Volume),
+        gpu_mask_volume: GpuVolume(MaskVolume),
 
         pub fn init(dev: *const gfx.Device, extent: vk.Extent2D, volume: *const Volume) !Self {
             var self = Self{
@@ -165,6 +174,12 @@ pub fn Renderer(comptime Volume: type) type {
                 .frame_resources = undefined,
                 .render_target_memory = .null_handle,
                 .gpu_volume = .{
+                    .memory = .null_handle,
+                    .image = .null_handle,
+                    .view = .null_handle,
+                    .sampler = .null_handle,
+                },
+                .gpu_mask_volume = .{
                     .memory = .null_handle,
                     .image = .null_handle,
                     .view = .null_handle,
@@ -188,9 +203,30 @@ pub fn Renderer(comptime Volume: type) type {
             try self.createCommandBuffers();
             try self.createRenderTargets(extent);
             self.gpu_volume = try GpuVolume(Volume).init(dev);
+            self.gpu_mask_volume = try GpuVolume(MaskVolume).init(dev);
 
             // Resource creation done at this point
-            try self.uploadVolume(volume);
+            try self.uploadVolume(self.gpu_volume, volume);
+
+            var mask_volume: MaskVolume = undefined;
+            mask_volume.clear(0);
+
+            const sub_dim = Volume.side_dim / MaskVolume.side_dim;
+            for (volume.voxels) |plane, x| {
+                for (plane) |row, y| {
+                    for (row) |voxel, z| {
+                        if (voxel != 0) {
+                            const mask_x = x / sub_dim;
+                            const mask_y = y / sub_dim;
+                            const mask_z = z / sub_dim;
+
+                            mask_volume.voxels[mask_x][mask_y][mask_z] = 255;
+                        }
+                    }
+                }
+            }
+
+            try self.uploadVolume(self.gpu_mask_volume, &mask_volume);
             self.updateDescriptorSets();
 
             return self;
@@ -199,6 +235,7 @@ pub fn Renderer(comptime Volume: type) type {
         pub fn deinit(self: Self) void {
             self.deinitRenderTargets();
             self.gpu_volume.deinit(self.dev);
+            self.gpu_mask_volume.deinit(self.dev);
 
             // The descriptor sets and command buffers do not need to be free'd, as they are freed when
             // their respective pool is destroyed.
@@ -411,8 +448,10 @@ pub fn Renderer(comptime Volume: type) type {
             }
         }
 
-        fn uploadVolume(self: Self, volume: *const Volume) !void {
-            const size = Volume.side_dim * Volume.side_dim * Volume.side_dim;
+        fn uploadVolume(self: Self, gpu_volume: anytype, volume: anytype) !void {
+            const V = @typeInfo(@TypeOf(volume)).Pointer.child;
+
+            const size = V.side_dim * V.side_dim * V.side_dim;
             const staging_buffer = try self.dev.vkd.createBuffer(self.dev.handle, .{
                 .flags = .{},
                 .size = size,
@@ -449,7 +488,7 @@ pub fn Renderer(comptime Volume: type) type {
             }
 
             const cmd_buf = self.frame_resources.cmd_bufs[0]; // Just steal a command buffer from here.
-            // Don't need to reset the pool, nothing has been done with it yet.
+            try self.dev.vkd.resetCommandPool(self.dev.handle, self.frame_resources.cmd_pools[0], .{});
 
             try self.dev.vkd.beginCommandBuffer(cmd_buf, .{
                 .flags = .{.one_time_submit_bit = true},
@@ -473,7 +512,7 @@ pub fn Renderer(comptime Volume: type) type {
                         .new_layout = .transfer_dst_optimal,
                         .src_queue_family_index = self.dev.compute_queue.family,
                         .dst_queue_family_index = self.dev.compute_queue.family,
-                        .image = self.gpu_volume.image,
+                        .image = gpu_volume.image,
                         .subresource_range = subresource_range,
                     },
                 };
@@ -500,13 +539,13 @@ pub fn Renderer(comptime Volume: type) type {
                         .layer_count = 1,
                     },
                     .image_offset = .{.x = 0, .y = 0, .z = 0},
-                    .image_extent = .{.width = Volume.side_dim, .height = Volume.side_dim, .depth = Volume.side_dim},
+                    .image_extent = .{.width = V.side_dim, .height = V.side_dim, .depth = V.side_dim},
                 };
 
                 self.dev.vkd.cmdCopyBufferToImage(
                     cmd_buf,
                     staging_buffer,
-                    self.gpu_volume.image,
+                    gpu_volume.image,
                     .transfer_dst_optimal,
                     1,
                     asManyPtr(&copy_info),
@@ -522,7 +561,7 @@ pub fn Renderer(comptime Volume: type) type {
                         .new_layout = .shader_read_only_optimal,
                         .src_queue_family_index = self.dev.compute_queue.family,
                         .dst_queue_family_index = self.dev.compute_queue.family,
-                        .image = self.gpu_volume.image,
+                        .image = gpu_volume.image,
                         .subresource_range = subresource_range,
                     },
                 };
@@ -569,6 +608,12 @@ pub fn Renderer(comptime Volume: type) type {
                     .image_layout = .shader_read_only_optimal,
                 };
 
+                const mask_volume_write = vk.DescriptorImageInfo{
+                    .sampler = self.gpu_mask_volume.sampler,
+                    .image_view = self.gpu_mask_volume.view,
+                    .image_layout = .shader_read_only_optimal,
+                };
+
                 const writes = [_]vk.WriteDescriptorSet{
                     .{
                         .dst_set = set,
@@ -587,6 +632,16 @@ pub fn Renderer(comptime Volume: type) type {
                         .descriptor_count = 1,
                         .descriptor_type = bindings[1].descriptor_type,
                         .p_image_info = asManyPtr(&volume_write),
+                        .p_buffer_info = undefined,
+                        .p_texel_buffer_view = undefined,
+                    },
+                    .{
+                        .dst_set = set,
+                        .dst_binding = bindings[2].binding,
+                        .dst_array_element = 0,
+                        .descriptor_count = 1,
+                        .descriptor_type = bindings[2].descriptor_type,
+                        .p_image_info = asManyPtr(&mask_volume_write),
                         .p_buffer_info = undefined,
                         .p_texel_buffer_view = undefined,
                     },
