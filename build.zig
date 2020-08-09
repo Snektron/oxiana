@@ -8,20 +8,26 @@ pub const ResourceGenStep = struct {
     step: Step,
     shader_step: *vk_gen.ShaderCompileStep,
     builder: *Builder,
-    full_out_path: []const u8,
+    package: std.build.Pkg,
     resources: std.ArrayList(u8),
 
     pub fn init(builder: *Builder, out: []const u8) *ResourceGenStep {
         const self = builder.allocator.create(ResourceGenStep) catch unreachable;
+        const full_out_path = path.join(builder.allocator, &[_][]const u8{
+            builder.build_root,
+            builder.cache_root,
+            out,
+        }) catch unreachable;
+
         self.* = .{
             .step = Step.init(.Custom, "resources", builder.allocator, make),
             .shader_step = vk_gen.ShaderCompileStep.init(builder, &[_][]const u8{"glslc", "--target-env=vulkan1.2"}),
             .builder = builder,
-            .full_out_path = path.join(builder.allocator, &[_][]const u8{
-                self.builder.build_root,
-                builder.cache_root,
-                out,
-            }) catch unreachable,
+            .package = .{
+                .name = "resources",
+                .path = full_out_path,
+                .dependencies = null,
+            },
             .resources = std.ArrayList(u8).init(builder.allocator),
         };
 
@@ -40,9 +46,9 @@ pub const ResourceGenStep = struct {
         const self = @fieldParentPtr(ResourceGenStep, "step", step);
         const cwd = std.fs.cwd();
 
-        const dir = path.dirname(self.full_out_path).?;
+        const dir = path.dirname(self.package.path).?;
         try cwd.makePath(dir);
-        try cwd.writeFile(self.full_out_path, self.resources.items);
+        try cwd.writeFile(self.package.path, self.resources.items);
     }
 };
 
@@ -57,19 +63,14 @@ pub fn build(b: *Builder) void {
     exe.linkSystemLibrary("c");
     exe.linkSystemLibrary("glfw");
 
-    const vk_sdk_path = std.os.getenv("VULKAN_SDK").?;
-    const vk_xml_path = std.fs.path.join(
-        b.allocator,
-        &[_][]const u8{vk_sdk_path, "share/vulkan/registry/vk.xml"},
-    ) catch unreachable;
-    const vk_gen_step = vk_gen.VkGenerateStep.init(b, vk_xml_path, "vk.zig");
+    const vk_gen_step = vk_gen.VkGenerateStep.initFromSdk(b, std.os.getenv("VULKAN_SDK").?, "vk.zig");
     exe.step.dependOn(&vk_gen_step.step);
-    exe.addPackagePath("vulkan", vk_gen_step.full_out_path);
+    exe.addPackage(vk_gen_step.package);
 
     const res = ResourceGenStep.init(b, "resources.zig");
     res.addShader("traverse_comp", "shaders/traverse.comp");
     exe.step.dependOn(&res.step);
-    exe.addPackagePath("resources", res.full_out_path);
+    exe.addPackage(res.package);
 
     const run_cmd = exe.run();
     run_cmd.step.dependOn(b.getInstallStep());
