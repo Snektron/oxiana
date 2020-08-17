@@ -30,7 +30,7 @@ const app_info = .{
 };
 
 const sensivity = .{
-    .mouse = 1,
+    .mouse = 0.001,
     .roll = 1.2,
     .movement = 100,
 };
@@ -212,7 +212,7 @@ pub const Oxiana = struct {
 
         self.camera = .{
             .rotation = math.Quaternion(f32).identity,
-            .translation = math.Vec(f32, 3).zero,
+            .translation = math.vec3(f32, 300, 300, 300),
         };
 
         self.input = Input.init();
@@ -289,7 +289,7 @@ pub const Oxiana = struct {
             }
 
             if (self.input.mouse_captured) {
-                const mouse_movement = self.input.mouse_pos.sub(self.input.last_mouse_pos).scale(-sensivity.mouse * dt);
+                const mouse_movement = self.input.mouse_pos.sub(self.input.last_mouse_pos).scale(-sensivity.mouse);
                 self.camera.rotate(math.Quaternion(f32).axisAngle(mouse_movement.swizzle("yx0"), 1));
                 self.camera.rotateRoll(-self.input.roll() * sensivity.roll * dt);
                 self.camera.moveForward(self.input.forwardMovement() * sensivity.movement * dt);
