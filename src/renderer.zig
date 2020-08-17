@@ -302,11 +302,13 @@ pub fn Renderer(comptime Volume: type) type {
             const entries = [_]vk.SpecializationMapEntry{
                 .{.constant_id = 0, .offset = 0, .size = @sizeOf(u32)}, // workgroup width
                 .{.constant_id = 1, .offset = 4, .size = @sizeOf(u32)}, // workgroup height
+                .{.constant_id = 2, .offset = 8, .size = @sizeOf(f32)}, // mask voxel side
             };
 
             const specialization_data = [_]u32{
                 workgroup_size.width,
                 workgroup_size.height,
+                @bitCast(u32, @intToFloat(f32, Volume.side_dim / MaskVolume.side_dim)),
             };
 
             const specialization_info = vk.SpecializationInfo{
