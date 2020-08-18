@@ -198,7 +198,7 @@ pub const Oxiana = struct {
         self.device = try self.instance.findAndCreateDevice(allocator, self.surface, required_device_extensions);
         errdefer self.device.deinit();
 
-        std.log.info(.oxiana, "Using device '{}'", .{ self.device.pdev.name() });
+        std.log.info("Using device '{}'", .{ self.device.pdev.name() });
 
         self.swapchain = try Swapchain.init(&self.instance, &self.device, allocator, initial_extent, .{
             .surface = self.surface,
