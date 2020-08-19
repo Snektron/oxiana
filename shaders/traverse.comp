@@ -72,7 +72,7 @@ uint volumeQuery(vec3 p, out vec3 offset, out float side) {
     return texelFetch(volume, ivec3(p), 0).r;
 }
 
-vec3 trace(vec3 ro, vec3 rd) {
+bool trace(vec3 ro, vec3 rd, out vec3 color, out vec3 normal) {
     const float min_step_size = 0.0001;
     vec3 rrd = 1.0 / rd;
     vec3 bias = rrd * ro;
@@ -85,7 +85,7 @@ vec3 trace(vec3 ro, vec3 rd) {
 
     if (t_min > t_max) {
         // Ray misses bounding cube
-        return vec3(rd);
+        return false;
     }
 
     t_min = max(t_min, 0);
@@ -93,22 +93,45 @@ vec3 trace(vec3 ro, vec3 rd) {
     vec3 flip_mask = vec3(lessThan(vec3(0), rd));
 
     float t = t_min + min_step_size;
-    int i = 0;
+    vec3 voxel_far = min(box_min, box_max);
     while (t < t_max) {
-        vec3 p = t * rd + ro;
-        vec3 offset;
-        float side;
-        uint voxel = volumeQuery(p, offset, side);
-        if (voxel != 0) {
-            return decodeR3G3B2(voxel);
+        float t_mask_far;
+        while (t < t_max) {
+            vec3 p = t * rd + ro;
+            vec3 mask_pos = p / mask_side;
+            vec3 mask_box_offset = floor(mask_pos) * mask_side;
+            vec3 mask_far = (mask_box_offset + flip_mask * mask_side) * rrd - bias;
+            t_mask_far = minElement(mask_far);
+
+            uint mask_voxel = texelFetch(mask_volume, ivec3(mask_pos), 0).r;
+            if (mask_voxel != 0) {
+                break;
+            }
+
+            t = max(t_mask_far, t + min_step_size);
         }
 
-        vec3 node = (offset + flip_mask * side) * rrd - bias;
-        float u = minElement(node);
-        t = max(u, t + min_step_size);
+        t_mask_far = min(t_max, t_mask_far);
+        while (t < t_mask_far) {
+            vec3 p = t * rd + ro;
+            uint voxel = texelFetch(volume, ivec3(p), 0).r;
+
+            if (voxel != 0) {
+                color = decodeR3G3B2(voxel);
+                normal = normalize(vec3(lessThan(voxel_far.xyz, min(voxel_far.yzx, voxel_far.zxy))));
+                return true;
+            }
+
+            vec3 voxel_box_offset = floor(p);
+            voxel_far = (voxel_box_offset + flip_mask) * rrd - bias;
+            float t_voxel_far = minElement(voxel_far);
+            t = max(t_voxel_far, t + min_step_size);
+        }
+
+        t = max(t_mask_far, t + min_step_size);
     }
 
-    return vec3(rd);
+    return false;
 }
 
 void main() {
@@ -122,6 +145,13 @@ void main() {
     vec2 uv = vec2(index) / dim;
     vec3 rd = ray(push.forward.xyz, push.up.xyz, uv, dim);
     vec3 ro = push.translation.xyz;
-    vec3 color = trace(ro, rd);
+
+    vec3 color, normal;
+    if (trace(ro, rd, color, normal)) {
+        color *= max(0.1, dot(normal, normalize(vec3(1, 2, 3))));
+    } else {
+        color = rd;
+    }
+
     imageStore(render_target, ivec2(index), vec4(color, 1));
 }
